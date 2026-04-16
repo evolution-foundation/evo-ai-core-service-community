@@ -24,6 +24,7 @@ type ApiKeyHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	GetModels(c *gin.Context)
 }
 
 // apiKeyHandler implements the ApiKeyHandler interface
@@ -59,6 +60,9 @@ func (h *apiKeyHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 		apiKeys.GET("/:id",
 			permissionMiddleware.RequirePermission("ai_api_keys", "read"),
 			h.GetByID)
+		apiKeys.GET("/:id/models",
+			permissionMiddleware.RequirePermission("ai_api_keys", "read"),
+			h.GetModels)
 
 		// Create permissions
 		apiKeys.POST("",
@@ -78,6 +82,20 @@ func (h *apiKeyHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			permissionMiddleware.RequirePermission("ai_api_keys", "delete"),
 			h.Delete)
 	}
+}
+
+func (h *apiKeyHandler) decryptKey(encrypted string) (string, error) {
+	fernetKey, err := fernet.DecodeKey(h.encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid encryption key: %w", err)
+	}
+
+	plain := fernet.VerifyAndDecrypt([]byte(encrypted), 0, []*fernet.Key{fernetKey})
+	if plain == nil {
+		return "", fmt.Errorf("failed to decrypt api key")
+	}
+
+	return string(plain), nil
 }
 
 func (h *apiKeyHandler) encryptKey(key string) (string, error) {
@@ -254,6 +272,55 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 	}
 
 	response.SuccessResponse(c, updatedApiKey.ToResponse(), "API key updated successfully", http.StatusOK)
+}
+
+// GetModels returns the list of models available for the provider associated
+// with the given API key, by calling the provider's models endpoint with the
+// decrypted key. The caller passes only the key ID — the plaintext key never
+// leaves the server.
+func (h *apiKeyHandler) GetModels(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	apiKey, err := h.apiKeyService.GetByID(c.Request.Context(), id)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	if !service.ProviderSupportsDynamicModels(apiKey.Provider) {
+		response.SuccessResponse(c, gin.H{
+			"provider":  apiKey.Provider,
+			"supported": false,
+			"models":    []service.ModelInfo{},
+		}, "Provider does not support dynamic model listing", http.StatusOK)
+		return
+	}
+
+	plainKey, err := h.decryptKey(apiKey.Key)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	models, err := service.FetchProviderModels(c.Request.Context(), apiKey.Provider, plainKey)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(fmt.Errorf("failed to fetch models from provider: %w", err))
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	response.SuccessResponse(c, gin.H{
+		"provider":  apiKey.Provider,
+		"supported": true,
+		"models":    models,
+	}, "Models retrieved successfully", http.StatusOK)
 }
 
 // Delete handles the delete api key request
