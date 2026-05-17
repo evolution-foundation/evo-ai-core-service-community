@@ -5,9 +5,9 @@
 // calls into for cross-cutting concerns it knows it cannot answer on
 // its own:
 //
-//   - [feature.Gate]      — feature gating
-//   - [tenant.Context]    — tenant identity propagation
-//   - [plugin.Registry]   — discovery of installed plugins
+//   - [capability.Gate]       — capability gating
+//   - [runtimecontext.Scope]  — runtime scope identity propagation
+//   - [plugin.Registry]       — discovery of installed plugins
 //
 // Each sub-package ships a no-op default implementation so that the
 // community release runs standalone. A consumer may swap the default
