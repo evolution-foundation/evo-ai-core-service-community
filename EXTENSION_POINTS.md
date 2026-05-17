@@ -1,6 +1,6 @@
 # Extension Points
 
-**Contract version:** `1.0.0` (SemVer)
+**Contract version:** `2.0.0` (SemVer)
 
 This document is the public contract between `evo-ai-core-service-community`
 and any external consumer that wants to plug into the Go service without
@@ -24,8 +24,8 @@ Each extension point is versioned independently and treated as a public
 Go API, with the same backward-compatibility rules as the REST `/v1/*`
 endpoints exposed by the service:
 
-- **Backward compatibility is forever.** Once shipped at `v1.0.0`, the
-  name, method set, parameter types and return types of an extension
+- **Backward compatibility is forever.** Once shipped at a given major,
+  the name, method set, parameter types and return types of an extension
   point do not change silently.
 - **Breaking changes require a major bump** of the affected extension
   point and of the community release that ships them.
@@ -47,10 +47,10 @@ The three interfaces below live under the `pkg/evoextensions/` import
 path of the Go module. Sub-packages outside the three listed here are
 private and may change without notice.
 
-### 1. `feature.Gate`
+### 1. `capability.Gate`
 
-**Version:** `1.0.0`
-**Import path:** `evo-ai-core-service/pkg/evoextensions/feature`
+**Version:** `2.0.0`
+**Import path:** `evo-ai-core-service/pkg/evoextensions/capability`
 
 ```go
 type Gate interface {
@@ -61,15 +61,15 @@ func Default() Gate // no-op: always returns true
 ```
 
 **Default behaviour.** `Default()` returns a gate whose `Enabled`
-always reports `true`. The community release ships with no feature
-gating; every flag is considered enabled.
+always reports `true`. The community release ships with no capability
+gating; every capability is considered enabled.
 
 Override (consumer wires its own gate at process start):
 
 ```go
-import "evo-ai-core-service/pkg/evoextensions/feature"
+import "evo-ai-core-service/pkg/evoextensions/capability"
 
-var gate feature.Gate = myConsumerGate{} // implements feature.Gate
+var gate capability.Gate = myConsumerGate{} // implements capability.Gate
 ```
 
 **Breaking-change policy.** Renaming `Gate`, `Enabled`, `Default`, or
@@ -78,42 +78,42 @@ Adding new interface methods to `Gate` is a major bump (it would force
 every existing implementation to update). Adding new sibling
 constructors (for example a `New(...)` helper) is a minor bump.
 
-### 2. `tenant.Context`
+### 2. `runtimecontext.Scope`
 
-**Version:** `1.0.0`
-**Import path:** `evo-ai-core-service/pkg/evoextensions/tenant`
+**Version:** `2.0.0`
+**Import path:** `evo-ai-core-service/pkg/evoextensions/runtimecontext`
 
 ```go
-type Context interface {
+type Scope interface {
     CurrentID(ctx context.Context) string
 }
 
-func Default() Context // no-op: always returns ""
+func Default() Scope // no-op: always returns ""
 ```
 
-**Default behaviour.** `Default()` returns a context whose `CurrentID`
+**Default behaviour.** `Default()` returns a scope whose `CurrentID`
 always reports the empty string. The community release runs in
-single-tenant mode by default.
+single-scope mode by default.
 
 Override:
 
 ```go
-import "evo-ai-core-service/pkg/evoextensions/tenant"
+import "evo-ai-core-service/pkg/evoextensions/runtimecontext"
 
-var tc tenant.Context = myConsumerTenant{} // implements tenant.Context
+var rc runtimecontext.Scope = myConsumerScope{} // implements runtimecontext.Scope
 ```
 
 The returned string is opaque to the community release; the empty
-string means "no tenant bound".
+string means "no scope bound".
 
-**Breaking-change policy.** Renaming `Context`, `CurrentID`, `Default`,
+**Breaking-change policy.** Renaming `Scope`, `CurrentID`, `Default`,
 or changing the parameter / return type of `CurrentID` is a major bump.
 Adding new interface methods is a major bump. Adding new sibling
 helpers is a minor bump.
 
 ### 3. `plugin.Registry`
 
-**Version:** `1.0.0`
+**Version:** `2.0.0`
 **Import path:** `evo-ai-core-service/pkg/evoextensions/plugin`
 
 ```go
@@ -127,7 +127,7 @@ func Default() Registry // no-op: always returns nil
 **Default behaviour.** `Default()` returns a registry whose `Discover`
 always reports `nil` (an empty set of plugins). The community release
 itself registers nothing; the registry is intentionally **read-only**
-in this contract — a public mutation API is not part of `v1.0.0`.
+in this contract — a public mutation API is not part of `v2.0.0`.
 
 Override:
 
@@ -141,7 +141,10 @@ var reg plugin.Registry = myConsumerRegistry{} // implements plugin.Registry
 or changing the return type of `Discover` (for example, from
 `[]string` to a richer struct slice) is a major bump. Adding read-only
 methods to the interface is a major bump. Exposing a public write API
-on the contract is a minor bump (additive).
+on the contract is a minor bump (additive). A future evolution that
+introduces remote / runtime plugin loading MUST require a signature or
+allowlist check at the registry level; the in-memory default is not a
+vehicle for arbitrary remote code execution.
 
 ---
 
@@ -151,32 +154,32 @@ Each extension point is independently overridable; a consumer picks
 only what it needs. The three mini-examples below are intentionally
 isolated.
 
-Feature gate:
+Capability gate:
 
 ```go
-import "evo-ai-core-service/pkg/evoextensions/feature"
+import "evo-ai-core-service/pkg/evoextensions/capability"
 
 type myGate struct{}
 
 func (myGate) Enabled(name string) bool { return true }
 
-var _ feature.Gate = myGate{}
+var _ capability.Gate = myGate{}
 ```
 
-Tenant context:
+Runtime scope:
 
 ```go
 import (
     "context"
 
-    "evo-ai-core-service/pkg/evoextensions/tenant"
+    "evo-ai-core-service/pkg/evoextensions/runtimecontext"
 )
 
-type myTenant struct{}
+type myScope struct{}
 
-func (myTenant) CurrentID(context.Context) string { return "" }
+func (myScope) CurrentID(context.Context) string { return "" }
 
-var _ tenant.Context = myTenant{}
+var _ runtimecontext.Scope = myScope{}
 ```
 
 Plugin registry:
@@ -212,3 +215,12 @@ it supports in its own `go.mod` via standard Go module versioning.
   into this repository; the relevant rules from it are restated in the
   [Compatibility Promise](#compatibility-promise) above so this
   document can be read on its own.
+
+---
+
+## Versioning history
+
+- `2.0.0` — Renamed extension points to neutral open-core vocabulary:
+  `feature.Gate` → `capability.Gate`, `tenant.Context` →
+  `runtimecontext.Scope`. Package import paths changed accordingly.
+- `1.0.0` — Initial contract.
