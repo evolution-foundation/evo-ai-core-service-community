@@ -19,19 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - N/A
 
+## [v1.0.0-rc4] - 2026-05-25
+
+No functional changes. Tag issued to keep the CRM Community family aligned on a single release-candidate version.
+
 ## [v1.0.0-rc3] - 2026-05-17
 
-Release de integração — adiciona o contrato `pkg/evoextensions` (extension points no-op para a futura Enterprise edition), expõe um proxy para listar Knowledge Spaces do Nexus a partir do builder de agentes, e padroniza docs/branding para Evolution Foundation 2026.
+Integration release — adds the `pkg/evoextensions` contract (no-op extension points for the future Enterprise edition), exposes a proxy to list Knowledge Spaces from Nexus from within the agent builder, and standardizes docs/branding for Evolution Foundation 2026.
 
 ### Added
 
-- **`pkg/evoextensions`** — três interfaces no-op publicadas como ponto de extensão (EVO-1285). O contrato fica versionado em `EXTENSION_POINTS.md` e permite que a Enterprise edition injete implementações sem fork.
-- **Knowledge Nexus — proxy de listagem de spaces** em `/agent-integrations`. Endpoint backend que consulta a API do Nexus e devolve a lista de spaces disponíveis, consumido pelo seletor de Knowledge Nexus no Agent Builder do frontend.
+- **`pkg/evoextensions`** — three no-op interfaces published as an extension point (EVO-1285). The contract is versioned in `EXTENSION_POINTS.md` and allows the Enterprise edition to inject implementations without forking.
+- **Knowledge Nexus — spaces listing proxy** in `/agent-integrations`. Backend endpoint that queries the Nexus API and returns the list of available spaces, consumed by the Knowledge Nexus selector in the frontend Agent Builder.
 
 ### Changed
 
-- **Docs** padronizados para Evolution Foundation 2026 (README, LICENSE, NOTICE, TRADEMARKS).
-- **Docs (org)** — URLs do GitHub atualizadas de `EvolutionAPI` para `evolution-foundation`.
+- **Docs** standardized for Evolution Foundation 2026 (README, LICENSE, NOTICE, TRADEMARKS).
+- **Docs (org)** — GitHub URLs updated from `EvolutionAPI` to `evolution-foundation`.
 
 ### Fixed
 
@@ -39,23 +43,24 @@ Release de integração — adiciona o contrato `pkg/evoextensions` (extension p
 
 ## [v1.0.0-rc2] - 2026-05-05
 
-Release sem mudanças funcionais neste serviço — apenas ajustes de pipeline / staging.
+Release with no functional changes in this service — only pipeline / staging adjustments.
 
 ### Changed
 
-- **CI**: workflow agora também publica imagens `develop` para staging. (#2)
+- **CI**: workflow now also publishes `develop` images to staging. (#2)
 
 ## [v1.0.0-rc1] - 2026-04-24
 
 ### Added
 
-- Primeiro release candidate público do `evo-ai-core-service-community`.
-- API de gerenciamento de agentes (`/agents`, `/apikeys`, `/folders`).
-- Integração com `evo-auth-service` para validação de Bearer tokens.
+- First public release candidate of `evo-ai-core-service-community`.
+- Agent management API (`/agents`, `/apikeys`, `/folders`).
+- Integration with `evo-auth-service` for Bearer token validation.
 
 ---
 
-[Unreleased]: https://github.com/evolution-foundation/evo-ai-core-service-community/compare/v1.0.0-rc3...HEAD
+[Unreleased]: https://github.com/evolution-foundation/evo-ai-core-service-community/compare/v1.0.0-rc4...HEAD
+[v1.0.0-rc4]: https://github.com/evolution-foundation/evo-ai-core-service-community/compare/v1.0.0-rc3...v1.0.0-rc4
 [v1.0.0-rc3]: https://github.com/evolution-foundation/evo-ai-core-service-community/compare/v1.0.0-rc2...v1.0.0-rc3
 [v1.0.0-rc2]: https://github.com/evolution-foundation/evo-ai-core-service-community/compare/v1.0.0-rc1...v1.0.0-rc2
 [v1.0.0-rc1]: https://github.com/EvolutionAPI/evo-ai-core-service-community/releases/tag/v1.0.0-rc1
