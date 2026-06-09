@@ -3,20 +3,15 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
-
-	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
+	"time"
 
 	"github.com/evolution-foundation/evo-enterprise-licensing-go/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
-
-// enterpriseScope is the package-level handle to the enterprise
-// runtimecontext.Scope. Future GO-* stories (carimbo de tenant em
-// INSERT, propagação no client) read CurrentID from this instance.
-var enterpriseScope runtimecontext.Scope
 
 // installRuntimeScope swaps the no-op community Default() scope for
 // an EnterpriseScope backed by the gem-owned membership table, then
@@ -29,8 +24,22 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 		log.Fatalf("enterprise wiring: cannot reach underlying *sql.DB: %v", err)
 	}
 
+	// Fail-fast: the membership table is owned by
+	// evo-enterprise-licensing-ruby. If the gem migration hasn't been
+	// applied yet, every enterprise request would hit `relation does
+	// not exist` and the middleware would surface it as 403. Detecting
+	// the missing table at boot makes the failure mode obvious instead
+	// of looking like a flood of legitimate auth denials.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := sqlDB.ExecContext(ctx,
+		`SELECT 1 FROM `+tenant.MembershipTable+` LIMIT 0`); err != nil {
+		log.Fatalf("enterprise wiring: membership table %q unreachable — "+
+			"apply the evo-enterprise-licensing-ruby migration before booting enterprise: %v",
+			tenant.MembershipTable, err)
+	}
+
 	scope := tenant.NewEnterpriseScope(tenant.NewSQLAuthorizer(sqlDB))
-	enterpriseScope = scope
 
 	mw := tenant.Middleware(scope, nil) // nil → DefaultUserIDExtractor reads ctx.Value("user_id")
 	v1.Use(ginAdapter(mw))
