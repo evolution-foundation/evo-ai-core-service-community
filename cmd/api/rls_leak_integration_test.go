@@ -42,10 +42,11 @@ import (
 )
 
 const (
-	envDatabaseURL = "EVO_TENANT_TEST_DATABASE_URL"
-	testRole       = "evo_app_tenant_test"
-	testRolePass   = "evo_app_tenant_test"
-	testRLSTable   = "tenant_test_rls_demo"
+	envDatabaseURL    = "EVO_TENANT_TEST_DATABASE_URL"
+	envAllowDestroy   = "EVO_TENANT_TEST_ALLOW_DESTRUCTIVE"
+	testRole          = "evo_app_tenant_test"
+	testRolePass      = "evo_app_tenant_test"
+	testRLSTable      = "tenant_test_rls_demo"
 )
 
 func openSuperuser(t *testing.T) *sql.DB {
@@ -101,15 +102,56 @@ func swapDSNUser(dsn, user, pass string) (string, error) {
 	return prefix + user + ":" + pass + "@" + rest[at+1:], nil
 }
 
+// guardDestructive refuses to run if the target database appears to hold
+// real data: it aborts when tenant.MembershipTable already exists with
+// rows, unless EVO_TENANT_TEST_ALLOW_DESTRUCTIVE=1 is set. This catches
+// the foot-gun where EVO_TENANT_TEST_DATABASE_URL is accidentally pointed
+// at a shared dev/staging DB — provision() would otherwise DROP the
+// canonical evo_enterprise_tenant_memberships table.
+func guardDestructive(t *testing.T, super *sql.DB) {
+	t.Helper()
+	if os.Getenv(envAllowDestroy) == "1" {
+		return
+	}
+	ctx := context.Background()
+	var exists bool
+	if err := super.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+		tenant.MembershipTable,
+	).Scan(&exists); err != nil {
+		t.Fatalf("guard: probe membership table existence: %v", err)
+	}
+	if !exists {
+		return
+	}
+	var count int
+	if err := super.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s`, tenant.MembershipTable),
+	).Scan(&count); err != nil {
+		t.Fatalf("guard: count membership rows: %v", err)
+	}
+	if count > 0 {
+		t.Fatalf("guard: refusing to drop %s — table has %d row(s); "+
+			"point %s at a disposable database, or set %s=1 to override",
+			tenant.MembershipTable, count, envDatabaseURL, envAllowDestroy)
+	}
+}
+
 func provision(t *testing.T, super *sql.DB) {
 	t.Helper()
+	guardDestructive(t, super)
 	ctx := context.Background()
 	stmts := []string{
+		// ALTER (not just CREATE IF NOT EXISTS) so a pre-existing role
+		// with a different password gets reset to the known credential —
+		// otherwise openAppGorm fails with a confusing auth error.
 		fmt.Sprintf(`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '%s') THEN
 				CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOBYPASSRLS;
+			ELSE
+				ALTER ROLE %s WITH LOGIN PASSWORD '%s' NOSUPERUSER NOBYPASSRLS;
 			END IF;
-		END $$`, testRole, testRole, testRolePass),
+		END $$`, testRole, testRole, testRolePass, testRole, testRolePass),
 
 		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 
@@ -225,6 +267,10 @@ func buildEngine(t *testing.T, db *gorm.DB, userID string) *gin.Engine {
 			}
 			seen = append(seen, fmt.Sprintf("%d=%s", id, payload))
 		}
+		if err := rows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"bound": bound, "rows": seen})
 	})
 	return r
@@ -287,6 +333,16 @@ func TestIntegration_RLSLeak_WireBindsAndFailsClosed(t *testing.T) {
 
 		if rr.Code != http.StatusForbidden {
 			t.Fatalf("status: want 403, got %d (body=%s)", rr.Code, rr.Body.String())
+		}
+		// Defense in depth: prove the probe handler never ran. If the wire
+		// ever regressed to "bind first, authorize later", a 403 + leaked
+		// rows in the body would be a real leak the status check misses.
+		body := rr.Body.String()
+		if strings.Contains(body, `"rows"`) || strings.Contains(body, `"bound"`) {
+			t.Fatalf("forbidden response leaked probe payload: %s", body)
+		}
+		if strings.Contains(body, "=B") || strings.Contains(body, "=A") {
+			t.Fatalf("forbidden response leaked RLS rows: %s", body)
 		}
 	})
 
