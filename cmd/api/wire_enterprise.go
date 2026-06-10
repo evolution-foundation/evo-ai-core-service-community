@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
+
 	"github.com/evolution-foundation/evo-enterprise-licensing-go/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -52,11 +54,22 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 //   - the request context carrying the bound tenant id + dedicated
 //     pgx conn propagates to downstream gin handlers,
 //   - the ReleaseFunc fires when the wrapped handler returns.
+//
+// EVO-1623 (GO-4): we also bridge the bound tenant id onto the
+// community runtimecontext key so downstream community code paths
+// (eg. the custom MCP server service that calls the processor) can
+// read it without importing the enterprise SDK directly.
 func ginAdapter(mw func(http.Handler) http.Handler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var aborted bool
 		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			c.Request = r
+			ctx := r.Context()
+			if tid := tenant.TenantIDFromContext(ctx); tid != "" {
+				ctx = runtimecontext.WithID(ctx, tid)
+				c.Request = r.WithContext(ctx)
+			} else {
+				c.Request = r
+			}
 			c.Next()
 		})
 		wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
