@@ -4,6 +4,7 @@ package tenantstamp
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
@@ -158,5 +159,70 @@ func TestStamp_BatchInsert_StampsEachRow(t *testing.T) {
 		if got.TenantID != tenantID {
 			t.Fatalf("batch row %s not stamped: got %s", r.ID, got.TenantID)
 		}
+	}
+}
+
+func TestStamp_MapCreate_StampsKey(t *testing.T) {
+	// db.Model(&X{}).Create(map[string]interface{}{...}) takes a
+	// different ReflectValue path (Kind == Map). The plugin must
+	// stamp tenant_id into the map so the emitted INSERT carries it.
+	db := openSQLite(t)
+	tenantID := uuid.New()
+	ctx := runtimecontext.WithID(context.Background(), tenantID.String())
+
+	rowID := uuid.New()
+	row := map[string]interface{}{
+		"id":   rowID,
+		"name": "via-map",
+	}
+	if err := db.WithContext(ctx).Model(&stamped{}).Create(row).Error; err != nil {
+		t.Fatalf("map create: %v", err)
+	}
+	var got stamped
+	if err := db.First(&got, "id = ?", rowID).Error; err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.TenantID != tenantID {
+		t.Fatalf("map create not stamped: want %s, got %s", tenantID, got.TenantID)
+	}
+}
+
+func TestStampMap_IncompatibleValueType_NoPanic(t *testing.T) {
+	// map[string]string can't hold uuid.UUID; without the assignability
+	// guard SetMapIndex would panic. The plugin must no-op cleanly.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("stampMap panicked on map[string]string: %v", r)
+		}
+	}()
+	m := map[string]string{"id": "x"}
+	rv := reflect.ValueOf(m)
+	stampMap(nil, rv, uuid.New())
+	if _, present := m["tenant_id"]; present {
+		t.Fatalf("stampMap should have no-op'd on incompatible value type; got tenant_id=%q", m["tenant_id"])
+	}
+}
+
+func TestStamp_MapCreate_CallerSet_NotOverwritten(t *testing.T) {
+	db := openSQLite(t)
+	ctxTenant := uuid.New()
+	callerTenant := uuid.New()
+	ctx := runtimecontext.WithID(context.Background(), ctxTenant.String())
+
+	rowID := uuid.New()
+	row := map[string]interface{}{
+		"id":        rowID,
+		"tenant_id": callerTenant,
+		"name":      "explicit-map",
+	}
+	if err := db.WithContext(ctx).Model(&stamped{}).Create(row).Error; err != nil {
+		t.Fatalf("map create: %v", err)
+	}
+	var got stamped
+	if err := db.First(&got, "id = ?", rowID).Error; err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.TenantID != callerTenant {
+		t.Fatalf("plugin clobbered caller-set map value: want %s, got %s", callerTenant, got.TenantID)
 	}
 }

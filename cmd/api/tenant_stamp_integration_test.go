@@ -4,6 +4,14 @@
 // stamps tenant_id on INSERT and is fail-closed when no tenant id is
 // bound, mirroring PY-3 (tenant_stamp.py) and the Linear ACs.
 //
+// Scope note: this test exercises the plugin against the synthetic
+// `tenant_test_rls_demo` table provisioned by rls_leak_integration_test.go,
+// NOT against any of the real evo_core_* tables. The plugin is
+// table-agnostic (it looks up the column by name via Schema.LookUpField),
+// so the demo table is sufficient to prove the mechanism + the
+// gem-owned RLS rejection path. End-to-end coverage of the 8 real models
+// vs. the gem-owned policy is left to the higher-level stack tests.
+//
 // Reuses the provision/teardown/openSuperuser/openAppGorm helpers from
 // rls_leak_integration_test.go (same package, same build tags).
 //

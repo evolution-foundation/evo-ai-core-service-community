@@ -87,16 +87,24 @@ func stamp(db *gorm.DB) {
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < rv.Len(); i++ {
-			setIfZero(db, field, rv.Index(i), parsed)
+			elem := reflect.Indirect(rv.Index(i))
+			if elem.Kind() == reflect.Map {
+				stampMap(db, elem, parsed)
+				continue
+			}
+			setIfZero(db, field, elem, parsed)
 		}
 	case reflect.Struct:
 		setIfZero(db, field, rv, parsed)
+	case reflect.Map:
+		stampMap(db, rv, parsed)
 	}
 }
 
 // setIfZero writes parsed into the tenant_id field of elem only when
-// the field is at its zero value. Respects callers that explicitly
-// pre-populate tenant_id (seeders, backfill jobs).
+// the field is at its zero value. field.ValueOf returns (value, isZero);
+// we drop the value and branch on isZero so callers that explicitly
+// pre-populate tenant_id (seeders, backfill jobs) are not clobbered.
 func setIfZero(db *gorm.DB, field *schema.Field, elem reflect.Value, parsed uuid.UUID) {
 	if !elem.IsValid() {
 		return
@@ -106,4 +114,34 @@ func setIfZero(db *gorm.DB, field *schema.Field, elem reflect.Value, parsed uuid
 		return
 	}
 	_ = field.Set(db.Statement.Context, elem, parsed)
+}
+
+// stampMap handles the map[string]interface{} Create path. GORM allows
+// `db.Model(&X{}).Create(map[string]interface{}{...})` for ad-hoc
+// inserts; the struct-based stamper above never sees those rows because
+// ReflectValue.Kind() is reflect.Map. We mirror setIfZero's "don't
+// clobber" rule: only set the key when it's absent or empty.
+func stampMap(db *gorm.DB, m reflect.Value, parsed uuid.UUID) {
+	if !m.IsValid() || m.IsNil() {
+		return
+	}
+	if m.Type().Key().Kind() != reflect.String {
+		return
+	}
+	// Guard against panic when the map's value type isn't interface{} and
+	// isn't directly assignable from uuid.UUID (eg. map[string]string).
+	// Such Create patterns are unusual but legal; we'd rather no-op than
+	// crash the request.
+	elemType := m.Type().Elem()
+	if elemType.Kind() != reflect.Interface && !reflect.TypeOf(parsed).AssignableTo(elemType) {
+		return
+	}
+	key := reflect.ValueOf(columnName)
+	if existing := m.MapIndex(key); existing.IsValid() {
+		v := reflect.ValueOf(existing.Interface())
+		if v.IsValid() && !v.IsZero() {
+			return
+		}
+	}
+	m.SetMapIndex(key, reflect.ValueOf(parsed))
 }

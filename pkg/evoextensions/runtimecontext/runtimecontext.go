@@ -31,6 +31,12 @@ const idKey ctxKey = 0
 // enterprise build can bridge its tenant binding into a context value
 // that downstream community code can read without importing the
 // enterprise SDK.
+//
+// Nil-ctx contract: we return the same nil rather than fabricating a
+// Background. A caller that passes nil is already broken — their next
+// ctx.Value()/ctx.Done() call panics regardless — so we keep the bug
+// at the original call site instead of papering over it with a
+// synthetic root.
 func WithID(ctx context.Context, id string) context.Context {
 	if ctx == nil {
 		return ctx
