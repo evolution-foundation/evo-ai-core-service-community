@@ -159,6 +159,13 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 	// The community runtimecontext returns "" in standalone builds; we
 	// only attach the header when an enterprise scope has bound a real
 	// tenant id, satisfying the "no tenant → omit header" AC.
+	//
+	// The header name is the literal `X-Evo-Tenant-Id` — keep in sync
+	// with `tenant.HeaderTenantID` in evo-enterprise-licensing-go. We
+	// intentionally do NOT import the enterprise SDK constant here to
+	// preserve the community/enterprise decoupling that `runtimecontext`
+	// exists to enforce; the cross-repo contract is asserted by PY-1's
+	// integration tests instead.
 	if tenantID := runtimecontext.IDFromContext(ctx); tenantID != "" {
 		headers["X-Evo-Tenant-Id"] = tenantID
 	}
