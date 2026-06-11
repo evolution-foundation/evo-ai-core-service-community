@@ -9,6 +9,7 @@ import (
 
 type FolderShare struct {
 	ID               uuid.UUID          `json:"-" gorm:"<-:create;type:uuid;primary_key;default:uuid_generate_v4()"`
+	TenantID         uuid.UUID          `json:"-" gorm:"column:tenant_id;type:uuid;not null"`
 	FolderID         uuid.UUID          `json:"-" gorm:"<-:create;type:uuid;not null; type:uuid;references:evo_core_folders(id)"`
 	Folder           folderModel.Folder `json:"-" gorm:"foreignKey:FolderID"`
 	SharedByUserID   uuid.UUID          `json:"-" gorm:"<-:create;not null;type:uuid"` // Removed foreign key reference to external users table

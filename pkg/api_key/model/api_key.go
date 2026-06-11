@@ -8,6 +8,7 @@ import (
 
 type ApiKey struct {
 	ID        uuid.UUID `json:"-" gorm:"<-:create;type:uuid;primary_key;default:uuid_generate_v4()"`
+	TenantID  uuid.UUID `json:"-" gorm:"column:tenant_id;type:uuid;not null"`
 	Name      string    `json:"-" gorm:"not null; type:varchar(255)"`
 	Provider  string    `json:"-" gorm:"not null; type:varchar(255)"`
 	Key       string    `json:"-" gorm:"not null; type:text"`

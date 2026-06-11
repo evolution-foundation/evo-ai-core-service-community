@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
+	"evo-ai-core-service/pkg/evoextensions/tenantstamp"
 
 	"github.com/evolution-foundation/evo-enterprise-licensing-go/tenant"
 	"github.com/gin-gonic/gin"
@@ -46,6 +47,16 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 	mw := tenant.Middleware(scope, nil) // nil → DefaultUserIDExtractor reads ctx.Value("user_id")
 	v1.Use(ginAdapter(mw))
 	log.Println("enterprise wiring: tenant middleware installed on /api/v1")
+
+	// EVO-1624 (GO-3): register the tenant_id stamping plugin so every
+	// INSERT into evo_core_* tables carries tenant_id read from the
+	// request context. Fail-closed by design — when no tenant id is
+	// bound, the field stays at uuid.Nil and the gem-owned RLS policy
+	// rejects the INSERT.
+	if err := db.Use(tenantstamp.Plugin{}); err != nil {
+		log.Fatalf("enterprise wiring: register tenant_stamp plugin: %v", err)
+	}
+	log.Println("enterprise wiring: tenant_stamp plugin registered")
 }
 
 // ginAdapter bridges a net/http middleware into the gin chain. It
