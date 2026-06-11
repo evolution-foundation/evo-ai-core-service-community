@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
+	"evo-ai-core-service/pkg/evoextensions/tenantstamp"
+
 	"github.com/evolution-foundation/evo-enterprise-licensing-go/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -44,6 +47,16 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 	mw := tenant.Middleware(scope, nil) // nil → DefaultUserIDExtractor reads ctx.Value("user_id")
 	v1.Use(ginAdapter(mw))
 	log.Println("enterprise wiring: tenant middleware installed on /api/v1")
+
+	// EVO-1624 (GO-3): register the tenant_id stamping plugin so every
+	// INSERT into evo_core_* tables carries tenant_id read from the
+	// request context. Fail-closed by design — when no tenant id is
+	// bound, the field stays at uuid.Nil and the gem-owned RLS policy
+	// rejects the INSERT.
+	if err := db.Use(tenantstamp.Plugin{}); err != nil {
+		log.Fatalf("enterprise wiring: register tenant_stamp plugin: %v", err)
+	}
+	log.Println("enterprise wiring: tenant_stamp plugin registered")
 }
 
 // ginAdapter bridges a net/http middleware into the gin chain. It
@@ -52,11 +65,22 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 //   - the request context carrying the bound tenant id + dedicated
 //     pgx conn propagates to downstream gin handlers,
 //   - the ReleaseFunc fires when the wrapped handler returns.
+//
+// EVO-1623 (GO-4): we also bridge the bound tenant id onto the
+// community runtimecontext key so downstream community code paths
+// (eg. the custom MCP server service that calls the processor) can
+// read it without importing the enterprise SDK directly.
 func ginAdapter(mw func(http.Handler) http.Handler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var aborted bool
 		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			c.Request = r
+			ctx := r.Context()
+			if tid := tenant.TenantIDFromContext(ctx); tid != "" {
+				ctx = runtimecontext.WithID(ctx, tid)
+				c.Request = r.WithContext(ctx)
+			} else {
+				c.Request = r
+			}
 			c.Next()
 		})
 		wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

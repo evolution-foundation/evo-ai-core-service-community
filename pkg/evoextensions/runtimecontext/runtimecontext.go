@@ -21,3 +21,39 @@ func (noop) CurrentID(context.Context) string { return "" }
 // It always reports the empty string, preserving the community
 // release's single-scope behaviour.
 func Default() Scope { return noop{} }
+
+type ctxKey int
+
+const idKey ctxKey = 0
+
+// WithID returns a copy of ctx carrying the given runtime-scope id. The
+// community release does not call this itself; the helper exists so the
+// enterprise build can bridge its tenant binding into a context value
+// that downstream community code can read without importing the
+// enterprise SDK.
+//
+// Nil-ctx contract: we return the same nil rather than fabricating a
+// Background. A caller that passes nil is already broken — their next
+// ctx.Value()/ctx.Done() call panics regardless — so we keep the bug
+// at the original call site instead of papering over it with a
+// synthetic root.
+func WithID(ctx context.Context, id string) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, idKey, id)
+}
+
+// IDFromContext returns the runtime-scope id bound to ctx via WithID,
+// or "" when no id is bound. Use this in community code paths that
+// need to propagate the active scope (eg. server-to-server header
+// propagation) without coupling to any specific Scope implementation.
+func IDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(idKey).(string); ok {
+		return v
+	}
+	return ""
+}
