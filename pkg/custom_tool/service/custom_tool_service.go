@@ -2,18 +2,88 @@ package service
 
 import (
 	"context"
-	"evo-ai-core-service/internal/httpclient"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/stringutils"
 	model "evo-ai-core-service/pkg/custom_tool/model"
 	repository "evo-ai-core-service/pkg/custom_tool/repository"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// testHTTPClient is the dedicated client for the custom-tools test endpoint.
+// It must NOT use the project's typed JSON helpers (DoGetJSON/DoPostJSON) because
+// custom tools can target arbitrary endpoints returning HTML, plain text, XML, etc.
+// We need to capture the raw response (status, headers, body) regardless of content-type.
+var testHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+}
+
+// runToolTest issues the HTTP request described by the tool and returns a TestResult
+// reflecting what actually happened: real status code, response time, headers, body.
+// Success is determined by HTTP status (2xx) — not by whether the body parses as JSON.
+func runToolTest(
+	ctx context.Context,
+	method, endpoint string,
+	headers map[string]string,
+) *model.TestResult {
+	result := &model.TestResult{}
+
+	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), endpoint, nil)
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to build request: %v", err)
+		return result
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	start := time.Now()
+	resp, err := testHTTPClient.Do(req)
+	elapsed := time.Since(start)
+	result.ResponseTime = elapsed.Seconds()
+
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "context deadline exceeded"), strings.Contains(msg, "Timeout"):
+			result.Error = "Request timeout"
+		case strings.Contains(msg, "no such host"):
+			result.Error = "DNS resolution failed"
+		case strings.Contains(msg, "connection refused"):
+			result.Error = "Connection refused"
+		default:
+			result.Error = msg
+		}
+		return result
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		result.Error = fmt.Sprintf("failed to read response body: %v", readErr)
+		result.StatusCode = resp.StatusCode
+		return result
+	}
+
+	result.StatusCode = resp.StatusCode
+	result.Body = string(body)
+	result.Headers = make(map[string]string, len(resp.Header))
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			result.Headers[k] = v[0]
+		}
+	}
+	result.Success = resp.StatusCode >= 200 && resp.StatusCode < 300
+	if !result.Success {
+		result.Error = fmt.Sprintf("HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+	return result
+}
 
 type CustomToolService interface {
 	Create(ctx context.Context, request model.CustomTool) (*model.CustomTool, error)
@@ -164,68 +234,17 @@ func (s *customToolService) Test(ctx context.Context, id uuid.UUID) (*model.Cust
 	}
 
 	response := customTool.ToResponse()
-	testResult := &model.TestResult{
-		Success: false,
-	}
+	method := strings.ToUpper(customTool.Method)
 
-	headers := stringutils.JSONToStringMap(customTool.Headers)
-	start := time.Now()
-
-	type TestResponse struct{}
-	var httpErr error
-
-	switch strings.ToUpper(customTool.Method) {
-	case http.MethodGet:
-		_, httpErr = httpclient.DoGetJSON[TestResponse](ctx,
-			customTool.Endpoint,
-			headers,
-			http.StatusOK,
-		)
-	case http.MethodPost:
-		_, httpErr = httpclient.DoPostJSON[TestResponse](ctx,
-			customTool.Endpoint,
-			nil,
-			headers,
-			http.StatusOK,
-		)
-	case http.MethodPut:
-		_, httpErr = httpclient.DoPutJSON[TestResponse](ctx,
-			customTool.Endpoint,
-			nil,
-			headers,
-			http.StatusOK,
-		)
-	case http.MethodDelete:
-		_, httpErr = httpclient.DoDeleteJSON[TestResponse](ctx,
-			customTool.Endpoint,
-			nil,
-			headers,
-			http.StatusOK,
-		)
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead, http.MethodOptions:
+		// supported
 	default:
-		testResult.Error = fmt.Sprintf("Unsupported method: %s", customTool.Method)
 		return nil, fmt.Errorf("unsupported method: %s", customTool.Method)
 	}
 
-	elapsed := time.Since(start)
-
-	if httpErr != nil {
-		testResult.Error = httpErr.Error()
-		if strings.Contains(httpErr.Error(), "connection") {
-			testResult.Error = "Connection error"
-		}
-		if strings.Contains(httpErr.Error(), "context deadline exceeded") || strings.Contains(httpErr.Error(), "timeout") {
-			testResult.Error = "Request timeout"
-		}
-		return &model.CustomToolTestResponse{
-			Tool:       response,
-			TestResult: testResult,
-		}, nil
-	}
-
-	testResult.Success = true
-	testResult.StatusCode = http.StatusOK
-	testResult.ResponseTime = elapsed.Seconds()
+	headers := stringutils.JSONToStringMap(customTool.Headers)
+	testResult := runToolTest(ctx, method, customTool.Endpoint, headers)
 
 	return &model.CustomToolTestResponse{
 		Tool:       response,

@@ -90,6 +90,7 @@ type TestResult struct {
 	StatusCode   int               `json:"status_code,omitempty"`
 	ResponseTime float64           `json:"response_time,omitempty"`
 	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
 	Error        string            `json:"error,omitempty"`
 }
 
