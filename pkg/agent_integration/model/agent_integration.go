@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"evo-ai-core-service/internal/infra/postgres"
+	"evo-ai-core-service/pkg/evoextensions/tenantfield"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,8 +11,9 @@ import (
 )
 
 type AgentIntegration struct {
+	tenantfield.TenantField
+
 	ID        uuid.UUID      `json:"-" gorm:"<-:create;type:uuid;primary_key;default:uuid_generate_v4()"`
-	TenantID  uuid.UUID      `json:"-" gorm:"column:tenant_id;type:uuid;not null;default:'00000000-0000-0000-0000-000000000000'"`
 	AgentID   uuid.UUID      `json:"-" gorm:"<-:create;not null;type:uuid"`
 	Provider  string         `json:"-" gorm:"not null;type:varchar(100)"`
 	Config    datatypes.JSON `json:"-" gorm:"type:jsonb;default:'{}'"`
