@@ -59,6 +59,8 @@ func (r *customToolRepository) List(ctx context.Context, request model.CustomToo
 		query = query.Where("tags && ?", pq.Array(strings.Split(request.Tags, ",")))
 	}
 
+	query = applyCustomToolFilters(query, request.Filters)
+
 	if err := query.Offset((request.Page - 1) * request.PageSize).Limit(request.PageSize).Find(&customTool).Error; err != nil {
 		return []*model.CustomTool{}, err
 	}
@@ -78,6 +80,8 @@ func (r *customToolRepository) Count(ctx context.Context, request model.CustomTo
 	if request.Tags != "" {
 		query = query.Where("tags && ?", pq.Array(strings.Split(request.Tags, ",")))
 	}
+
+	query = applyCustomToolFilters(query, request.Filters)
 
 	if err := query.Count(&count).Error; err != nil {
 		return 0, err

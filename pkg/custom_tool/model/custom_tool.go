@@ -81,10 +81,20 @@ type CustomToolResponse struct {
 }
 
 type CustomToolListRequest struct {
-	Page     int    `json:"-" binding:"required"`
-	PageSize int    `json:"-" binding:"required"`
-	Search   string `json:"-" binding:"required"`
-	Tags     string `json:"-"`
+	Page     int                    `json:"-" binding:"required"`
+	PageSize int                    `json:"-" binding:"required"`
+	Search   string                 `json:"-" binding:"required"`
+	Tags     string                 `json:"-"`
+	Filters  []CustomToolListFilter `json:"-"`
+}
+
+// CustomToolListFilter is one advanced-filter clause from the Custom Tools list
+// screen (filters[i][attribute_key|filter_operator|values|query_operator]).
+type CustomToolListFilter struct {
+	AttributeKey   string
+	FilterOperator string
+	QueryOperator  string
+	Values         []string
 }
 
 type TestResult struct {

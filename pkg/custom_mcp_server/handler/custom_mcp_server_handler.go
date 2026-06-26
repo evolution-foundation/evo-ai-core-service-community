@@ -8,6 +8,8 @@ import (
 	"evo-ai-core-service/pkg/custom_mcp_server/model"
 	"evo-ai-core-service/pkg/custom_mcp_server/service"
 	"net/http"
+	"regexp"
+	"sort"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -129,6 +131,57 @@ func (h *customMcpServerHandler) GetByID(c *gin.Context) {
 }
 
 // List handles the list custom mcp servers request.
+var customMcpServerFilterKeyPattern = regexp.MustCompile(`^filters\[(\d+)\]\[(\w+)\]$`)
+
+// parseCustomMcpServerFilters reads the advanced-filter payload the Custom MCP
+// Servers list screen sends in bracket query params
+// (filters[0][attribute_key]=name&...), ordered by index. Unknown attribute keys
+// are dropped later by the whitelist.
+func parseCustomMcpServerFilters(c *gin.Context) []model.CustomMcpServerListFilter {
+	byIndex := map[int]*model.CustomMcpServerListFilter{}
+
+	for key, values := range c.Request.URL.Query() {
+		matches := customMcpServerFilterKeyPattern.FindStringSubmatch(key)
+		if matches == nil || len(values) == 0 {
+			continue
+		}
+
+		index, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+
+		filter, ok := byIndex[index]
+		if !ok {
+			filter = &model.CustomMcpServerListFilter{}
+			byIndex[index] = filter
+		}
+
+		switch matches[2] {
+		case "attribute_key":
+			filter.AttributeKey = values[0]
+		case "filter_operator":
+			filter.FilterOperator = values[0]
+		case "query_operator":
+			filter.QueryOperator = values[0]
+		case "values":
+			filter.Values = []string{values[0]}
+		}
+	}
+
+	indices := make([]int, 0, len(byIndex))
+	for index := range byIndex {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+
+	filters := make([]model.CustomMcpServerListFilter, 0, len(indices))
+	for _, index := range indices {
+		filters = append(filters, *byIndex[index])
+	}
+	return filters
+}
+
 func (h *customMcpServerHandler) List(c *gin.Context) {
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
@@ -171,6 +224,7 @@ func (h *customMcpServerHandler) List(c *gin.Context) {
 	req.PageSize = pageSize
 	req.Search = search
 	req.Tags = tags
+	req.Filters = parseCustomMcpServerFilters(c)
 
 	listCustomMcpServer, err := h.customMcpServerService.List(c.Request.Context(), req)
 

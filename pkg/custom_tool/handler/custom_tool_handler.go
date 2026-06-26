@@ -8,6 +8,8 @@ import (
 	"evo-ai-core-service/pkg/custom_tool/model"
 	"evo-ai-core-service/pkg/custom_tool/service"
 	"net/http"
+	"regexp"
+	"sort"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -136,6 +138,56 @@ func (h *customToolHandler) GetByID(c *gin.Context) {
 }
 
 // List handles the list custom tools request
+var customToolFilterKeyPattern = regexp.MustCompile(`^filters\[(\d+)\]\[(\w+)\]$`)
+
+// parseCustomToolFilters reads the advanced-filter payload the Custom Tools list
+// screen sends in bracket query params (filters[0][attribute_key]=name&...),
+// ordered by index. Unknown attribute keys are dropped later by the whitelist.
+func parseCustomToolFilters(c *gin.Context) []model.CustomToolListFilter {
+	byIndex := map[int]*model.CustomToolListFilter{}
+
+	for key, values := range c.Request.URL.Query() {
+		matches := customToolFilterKeyPattern.FindStringSubmatch(key)
+		if matches == nil || len(values) == 0 {
+			continue
+		}
+
+		index, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+
+		filter, ok := byIndex[index]
+		if !ok {
+			filter = &model.CustomToolListFilter{}
+			byIndex[index] = filter
+		}
+
+		switch matches[2] {
+		case "attribute_key":
+			filter.AttributeKey = values[0]
+		case "filter_operator":
+			filter.FilterOperator = values[0]
+		case "query_operator":
+			filter.QueryOperator = values[0]
+		case "values":
+			filter.Values = []string{values[0]}
+		}
+	}
+
+	indices := make([]int, 0, len(byIndex))
+	for index := range byIndex {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+
+	filters := make([]model.CustomToolListFilter, 0, len(indices))
+	for _, index := range indices {
+		filters = append(filters, *byIndex[index])
+	}
+	return filters
+}
+
 func (h *customToolHandler) List(c *gin.Context) {
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
@@ -178,6 +230,7 @@ func (h *customToolHandler) List(c *gin.Context) {
 	req.PageSize = pageSize
 	req.Search = search
 	req.Tags = tags
+	req.Filters = parseCustomToolFilters(c)
 
 	listCustomTools, err := h.customToolService.List(c.Request.Context(), req)
 

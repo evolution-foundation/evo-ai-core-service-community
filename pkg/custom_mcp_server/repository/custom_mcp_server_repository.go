@@ -60,6 +60,8 @@ func (r *customMcpServerRepository) List(ctx context.Context, request model.Cust
 		query = query.Where("tags && ?", pq.Array(strings.Split(request.Tags, ",")))
 	}
 
+	query = applyCustomMcpServerFilters(query, request.Filters)
+
 	if err := query.Offset((request.Page - 1) * request.PageSize).Limit(request.PageSize).Find(&customMcpServer).Error; err != nil {
 		return []*model.CustomMcpServer{}, err
 	}
@@ -79,6 +81,8 @@ func (r *customMcpServerRepository) Count(ctx context.Context, request model.Cus
 	if request.Tags != "" {
 		query = query.Where("tags && ?", pq.Array(strings.Split(request.Tags, ",")))
 	}
+
+	query = applyCustomMcpServerFilters(query, request.Filters)
 
 	if err := query.Count(&count).Error; err != nil {
 		return 0, err
