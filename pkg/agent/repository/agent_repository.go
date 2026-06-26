@@ -12,10 +12,10 @@ import (
 type AgentRepository interface {
 	Create(ctx context.Context, agent model.Agent) (*model.Agent, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error)
-	List(ctx context.Context, page int, pageSize int) ([]*model.Agent, error)
+	List(ctx context.Context, page int, pageSize int, filters []model.AgentListFilter, search string) ([]*model.Agent, error)
 	Update(ctx context.Context, agent *model.Agent, id uuid.UUID) (*model.Agent, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
-	Count(ctx context.Context) (int64, error)
+	Count(ctx context.Context, filters []model.AgentListFilter, search string) (int64, error)
 	CountByFolderID(ctx context.Context, folderId uuid.UUID) (int64, error)
 	RemoveFolder(ctx context.Context, id uuid.UUID) (*model.Agent, error)
 	ListAgentsByFolderID(ctx context.Context, folderId uuid.UUID, page int, pageSize int) ([]*model.Agent, error)
@@ -47,10 +47,11 @@ func (r *agentRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Age
 	return &agent, nil
 }
 
-func (r *agentRepository) List(ctx context.Context, page int, pageSize int) ([]*model.Agent, error) {
+func (r *agentRepository) List(ctx context.Context, page int, pageSize int, filters []model.AgentListFilter, search string) ([]*model.Agent, error) {
 	var agents []*model.Agent
 
-	if err := r.db.WithContext(ctx).Offset((page - 1) * pageSize).Limit(pageSize).Find(&agents).Error; err != nil {
+	query := applyAgentFilters(r.db.WithContext(ctx), filters, search)
+	if err := query.Offset((page - 1) * pageSize).Limit(pageSize).Find(&agents).Error; err != nil {
 		return []*model.Agent{}, err
 	}
 
@@ -74,9 +75,10 @@ func (r *agentRepository) Delete(ctx context.Context, id uuid.UUID) (bool, error
 	return true, nil
 }
 
-func (r *agentRepository) Count(ctx context.Context) (int64, error) {
+func (r *agentRepository) Count(ctx context.Context, filters []model.AgentListFilter, search string) (int64, error) {
 	var count int64
-	if err := r.db.WithContext(ctx).Model(&model.Agent{}).Count(&count).Error; err != nil {
+	query := applyAgentFilters(r.db.WithContext(ctx).Model(&model.Agent{}), filters, search)
+	if err := query.Count(&count).Error; err != nil {
 		return 0, err
 	}
 

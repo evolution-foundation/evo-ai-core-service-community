@@ -14,6 +14,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -171,6 +173,56 @@ func (h *agentHandler) GetByID(c *gin.Context) {
 }
 
 // List handles the list agents request
+var agentFilterKeyPattern = regexp.MustCompile(`^filters\[(\d+)\]\[(\w+)\]$`)
+
+// parseAgentFilters reads the advanced-filter payload the Agents list screen
+// sends in bracket query params (filters[0][attribute_key]=name&...), ordered
+// by index. Unknown attribute keys are dropped later by the repository whitelist.
+func parseAgentFilters(c *gin.Context) []model.AgentListFilter {
+	byIndex := map[int]*model.AgentListFilter{}
+
+	for key, values := range c.Request.URL.Query() {
+		matches := agentFilterKeyPattern.FindStringSubmatch(key)
+		if matches == nil || len(values) == 0 {
+			continue
+		}
+
+		index, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+
+		filter, ok := byIndex[index]
+		if !ok {
+			filter = &model.AgentListFilter{}
+			byIndex[index] = filter
+		}
+
+		switch matches[2] {
+		case "attribute_key":
+			filter.AttributeKey = values[0]
+		case "filter_operator":
+			filter.FilterOperator = values[0]
+		case "query_operator":
+			filter.QueryOperator = values[0]
+		case "values":
+			filter.Values = []string{values[0]}
+		}
+	}
+
+	indices := make([]int, 0, len(byIndex))
+	for index := range byIndex {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+
+	filters := make([]model.AgentListFilter, 0, len(indices))
+	for _, index := range indices {
+		filters = append(filters, *byIndex[index])
+	}
+	return filters
+}
+
 func (h *agentHandler) List(c *gin.Context) {
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
@@ -205,7 +257,10 @@ func (h *agentHandler) List(c *gin.Context) {
 		pageSize = limitVal
 	}
 
-	listAgents, err := h.agentService.List(c.Request.Context(), page, pageSize)
+	filters := parseAgentFilters(c)
+	search := c.Query("search")
+
+	listAgents, err := h.agentService.List(c.Request.Context(), page, pageSize, filters, search)
 
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)

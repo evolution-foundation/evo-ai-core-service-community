@@ -28,7 +28,7 @@ import (
 type AgentService interface {
 	Create(ctx context.Context, request model.Agent) (*model.Agent, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error)
-	List(ctx context.Context, page int, pageSize int) (*model.AgentListResponse, error)
+	List(ctx context.Context, page int, pageSize int, filters []model.AgentListFilter, search string) (*model.AgentListResponse, error)
 	Update(ctx context.Context, request *model.Agent, id uuid.UUID) (*model.Agent, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	ImportAgents(ctx context.Context, request model.AgentImportRequest) ([]*model.AgentResponse, error)
@@ -434,13 +434,13 @@ func (s *agentService) GetByID(ctx context.Context, id uuid.UUID) (*model.Agent,
 	return agent, nil
 }
 
-func (s *agentService) List(ctx context.Context, page int, pageSize int) (*model.AgentListResponse, error) {
-	agents, err := s.agentRepository.List(ctx, page, pageSize)
+func (s *agentService) List(ctx context.Context, page int, pageSize int, filters []model.AgentListFilter, search string) (*model.AgentListResponse, error) {
+	agents, err := s.agentRepository.List(ctx, page, pageSize, filters, search)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
-	totalItems, err := s.agentRepository.Count(ctx)
+	totalItems, err := s.agentRepository.Count(ctx, filters, search)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
@@ -762,7 +762,7 @@ func (s *agentService) ListReadAgents(ctx context.Context, request *model.AgentR
 		return agents, nil
 	}
 
-	agentsResponse, err := s.List(ctx, request.Page, request.PageSize)
+	agentsResponse, err := s.List(ctx, request.Page, request.PageSize, nil, "")
 	if err != nil {
 		return nil, err
 	}
