@@ -139,6 +139,10 @@ func main() {
 	// binary is built with `-tags=guardian` (cmd/api/wire_guardian.go). The
 	// guardian runs for the life of the process on context.Background().
 	installGuardian(context.Background(), db)
+	// installConfigWriter is a build-tagged hook: no-op in the community build
+	// (cmd/api/wire_writer_community.go), enterprise override behind
+	// `-tags=enterprise` (cmd/api/wire_writer_enterprise.go).
+	installConfigWriter(context.Background())
 	{
 		customToolModule.Handler.RegisterRoutesMiddleware(v1)
 		customMcpServerModule.Handler.RegisterRoutesMiddleware(v1)
