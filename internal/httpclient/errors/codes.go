@@ -2,6 +2,8 @@ package errors
 
 import (
 	"net/http"
+
+	"evo-ai-core-service/internal/infra/postgres"
 )
 
 // Standard error codes
@@ -142,6 +144,14 @@ func HandleError(err error) (code string, message string, httpCode int) {
 	// Check if it's already an ApiError
 	if apiErr, ok := err.(*ApiError); ok {
 		return apiErr.Code, apiErr.Message, apiErr.HTTPCode
+	}
+
+	// Errors mapped from the database layer (postgres.MapDBError) carry their own
+	// code + HTTP status (duplicate key → 409, record not found → 404, etc.). Sem
+	// este ramo eles caíam no default abaixo e viravam 500/INTERNAL_ERROR — foi o
+	// motivo de "API key with this name already exists" retornar 500 em vez de 409.
+	if dbErr, ok := err.(*postgres.Error); ok {
+		return string(dbErr.Code), dbErr.Message, dbErr.HTTPCode
 	}
 
 	// Default to internal error
