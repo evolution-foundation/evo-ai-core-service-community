@@ -98,27 +98,57 @@ const callbackName = "evo:tenant_stamp"
 // stamper, which runs Before("gorm:create").
 const rerouteCallbackName = "evo:tenant_reroute"
 
+// rerouteUpdateCallbackName / rerouteDeleteCallbackName são os reroutes
+// SIMÉTRICOS ao de Create, mas nas chains de Update e Delete. Sem eles, um
+// UPDATE/DELETE das 8 tabelas fail-closed rodava no pool global com GUC vazio:
+// a policy USING (tenant_id = current_setting('app.current_tenant_id')) não
+// casava nenhuma linha → `rows:0` SILENCIOSO (nem erro nem persistência). Era a
+// raiz de "editar agente não salva" (custom_mcp_server_ids, name, instruction,
+// model — TUDO congelava na config do CREATE). O hook é o MESMO do Create:
+// Before("gorm:begin_transaction") (em GORM v1.30.0 tanto a Update quanto a
+// Delete chain têm gorm:begin_transaction como PRIMEIRO callback), para rotear a
+// ConnPool ANTES da auto-tx do GORM abrir no pool bare e evitar o double-commit
+// 500 documentado em routeScopedTenantWrite. NÃO usar Before("gorm:update"):
+// dispara DEPOIS do begin_transaction.
+const rerouteUpdateCallbackName = "evo:tenant_reroute_update"
+const rerouteDeleteCallbackName = "evo:tenant_reroute_delete"
+
 // Plugin implements gorm.Plugin.
 type Plugin struct{}
 
 // Name returns the plugin identity used by GORM's plugin registry.
 func (Plugin) Name() string { return callbackName }
 
-// Initialize registers TWO Create callbacks:
+// Initialize registers the reroute + value-stamp callbacks:
 //
-//  1. evo:tenant_reroute — Before("gorm:begin_transaction"): for the
-//     schemaless allowlist (agent_bots), reroutes ConnPool onto the
-//     scope-bound tx BEFORE GORM's default transaction begins, so
-//     GORM's auto-tx becomes a swallowed no-op instead of committing
-//     our request-scoped tx early (see routeSchemalessTenantWrite).
-//  2. evo:tenant_stamp — Before("gorm:create"): stamps the tenant_id
-//     VALUE on models that declare the column (the normal path).
+//  1. evo:tenant_reroute — Create.Before("gorm:begin_transaction"):
+//     reroutes ConnPool onto the scope-bound tx BEFORE GORM's default
+//     transaction begins, so GORM's auto-tx becomes a swallowed no-op
+//     instead of committing our request-scoped tx early (see
+//     routeScopedTenantWrite).
+//  2. evo:tenant_reroute_update / evo:tenant_reroute_delete —
+//     Update/Delete.Before("gorm:begin_transaction"): the SAME reroute
+//     on the Update and Delete chains. Sem eles, UPDATE/DELETE das 8
+//     tabelas fail-closed rodava no pool com GUC vazio e batia 0 linhas
+//     silenciosamente (a edição de agente nunca persistia). O reroute é
+//     table-based e agnóstico à operação, então o mesmo callback serve
+//     Create/Update/Delete.
+//  3. evo:tenant_stamp — Create.Before("gorm:create"): stamps the
+//     tenant_id VALUE on models that declare the column (the normal
+//     path). Só no Create: o UPDATE não re-carimba tenant_id (a linha já
+//     tem o valor; o reroute basta para a policy WITH CHECK/USING casar).
 //
 // They are split so the normal value-stamp path keeps running at its
-// proven position and the reroute fires at the only point where it is
+// proven position and each reroute fires at the only point where it is
 // correct (before begin_transaction).
 func (Plugin) Initialize(db *gorm.DB) error {
 	if err := db.Callback().Create().Before("gorm:begin_transaction").Register(rerouteCallbackName, rerouteSchemaless); err != nil {
+		return err
+	}
+	if err := db.Callback().Update().Before("gorm:begin_transaction").Register(rerouteUpdateCallbackName, rerouteSchemaless); err != nil {
+		return err
+	}
+	if err := db.Callback().Delete().Before("gorm:begin_transaction").Register(rerouteDeleteCallbackName, rerouteSchemaless); err != nil {
 		return err
 	}
 	return db.Callback().Create().Before("gorm:create").Register(callbackName, stamp)
