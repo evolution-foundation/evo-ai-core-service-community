@@ -45,7 +45,7 @@ type CustomToolBase struct {
 	QueryParams   map[string]interface{} `json:"query_params" binding:"required"`
 	BodyParams    map[string]interface{} `json:"body_params" binding:"required"`
 	ErrorHandling map[string]interface{} `json:"error_handling" binding:"required"`
-	Values        map[string]string      `json:"values" binding:"required"`
+	Values        map[string]interface{} `json:"values" binding:"required"`
 	Tags          []string               `json:"tags" validate:"dive"`
 	Examples      []string               `json:"examples" validate:"dive"`
 	InputModes    []string               `json:"input_modes" validate:"dive"`
@@ -71,7 +71,7 @@ type CustomToolResponse struct {
 	QueryParams   map[string]interface{} `json:"query_params"`
 	BodyParams    map[string]interface{} `json:"body_params"`
 	ErrorHandling map[string]interface{} `json:"error_handling"`
-	Values        map[string]string      `json:"values"`
+	Values        map[string]interface{} `json:"values"`
 	Tags          []string               `json:"tags"`
 	Examples      []string               `json:"examples"`
 	InputModes    []string               `json:"input_modes"`
@@ -133,7 +133,7 @@ func (u *CustomTool) ToResponse() *CustomToolResponse {
 		QueryParams:   stringutils.JSONToInterfaceMap(u.QueryParams),
 		BodyParams:    stringutils.JSONToInterfaceMap(u.BodyParams),
 		ErrorHandling: stringutils.JSONToInterfaceMap(u.ErrorHandling),
-		Values:        stringutils.JSONToStringMap(u.Values),
+		Values:        stringutils.JSONToInterfaceMap(u.Values),
 		Tags:          u.Tags,
 		Examples:      u.Examples,
 		InputModes:    u.InputModes,
