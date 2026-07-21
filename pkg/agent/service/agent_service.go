@@ -323,11 +323,15 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 	}
 
 	if reconstructed {
+		// EVO-2126: hydrate the response IN-MEMORY ONLY — never write it back.
+		// reconstructCustomConfigurations runs on reads (GetByID/List), so the previous
+		// agentRepository.Update froze a copy of the tool/MCP server (endpoint, headers,
+		// values) into the agent's config: editing it in the catalog never reached the
+		// agent, and deleting it left the agent running the stale copy. The processor
+		// resolves the ids fresh at build time (EVO-2125) and the frontend always sends
+		// custom_tools, so nothing needs the persisted copy. Mirrors the processor's
+		// _reconstruct_custom_configurations (in-memory only, never persisted).
 		agent.Config = stringutils.InterfaceMapToJSON(config)
-		if _, err := s.agentRepository.Update(ctx, agent, agent.ID); err != nil {
-			log.Printf("Error updating agent %s: %v", agent.ID, err)
-			return err
-		}
 	}
 
 	return nil
