@@ -11,6 +11,8 @@ import (
 
 	"evo-ai-core-service/pkg/agent/model"
 	"evo-ai-core-service/pkg/agent/repository"
+	mcpModel "evo-ai-core-service/pkg/custom_mcp_server/model"
+	customMCPServer "evo-ai-core-service/pkg/custom_mcp_server/service"
 	customToolModel "evo-ai-core-service/pkg/custom_tool/model"
 	customTool "evo-ai-core-service/pkg/custom_tool/service"
 
@@ -40,6 +42,16 @@ func (f *fakeCustomToolService) List(_ context.Context, _ customToolModel.Custom
 
 func (f *fakeCustomToolService) ConvertToHTTPTool(tool customToolModel.CustomToolResponse) map[string]interface{} {
 	return map[string]interface{}{"name": tool.Name, "endpoint": tool.Endpoint}
+}
+
+// fakeMCPServerService embeds the interface (nil) and returns one server by id.
+type fakeMCPServerService struct {
+	customMCPServer.CustomMcpServerService
+	server *mcpModel.CustomMcpServer
+}
+
+func (f *fakeMCPServerService) GetByAgentConfig(_ context.Context, _ []uuid.UUID) ([]*mcpModel.CustomMcpServer, error) {
+	return []*mcpModel.CustomMcpServer{f.server}, nil
 }
 
 func TestReconstructCustomConfigurations_DoesNotPersist(t *testing.T) {
@@ -87,5 +99,31 @@ func TestReconstructCustomConfigurations_SkipsWhenCustomToolsPresent(t *testing.
 	}
 	if repo.updateCalled {
 		t.Error("Update must not be called when custom_tools already exists")
+	}
+}
+
+func TestReconstructCustomConfigurations_MCPServers_DoesNotPersist(t *testing.T) {
+	// Same freeze bug on the MCP-server path: the write-back is a single shared block,
+	// so removing it must cover custom_mcp_server_ids too.
+	serverID := uuid.New()
+	repo := &fakeAgentRepo{}
+	svc := &agentService{
+		agentRepository:        repo,
+		customMCPServerService: &fakeMCPServerService{server: &mcpModel.CustomMcpServer{ID: serverID, Name: "notion"}},
+	}
+
+	agent := &model.Agent{
+		ID:     uuid.New(),
+		Config: `{"custom_mcp_server_ids":["` + serverID.String() + `"]}`, // no custom_mcp_servers key
+	}
+
+	if err := svc.reconstructCustomConfigurations(context.Background(), agent); err != nil {
+		t.Fatalf("returned error: %v", err)
+	}
+	if repo.updateCalled {
+		t.Error("agentRepository.Update was called on the MCP path — must be in-memory only")
+	}
+	if !strings.Contains(agent.Config, "custom_mcp_servers") {
+		t.Errorf("agent.Config MCP servers not hydrated in memory: %s", agent.Config)
 	}
 }
