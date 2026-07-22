@@ -1,0 +1,40 @@
+name: Go Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: go vet + go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          # Same modfile the Dockerfile builds with: go.mod carries a `replace` for the
+          # enterprise SDK pointing at a sibling checkout that does not exist in CI.
+          go-version-file: go.community.mod
+          cache-dependency-path: go.community.sum
+
+      # Mirrors the image build (Dockerfile), so a red job here means a red image.
+      - name: Build
+        run: go build -modfile=go.community.mod ./...
+
+      - name: Vet
+        run: go vet -modfile=go.community.mod ./...
+
+      - name: Test
+        run: go test -modfile=go.community.mod ./...

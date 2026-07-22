@@ -248,7 +248,54 @@ func isFlowType(t string) bool {
 		t == model.AgentTypeLoop
 }
 
-func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agent *model.Agent) error {
+// customToolCache memoizes the custom-tool catalog for the duration of a single
+// read. Hydration is no longer persisted (EVO-2126), so every agent that enters the
+// expansion re-reads the catalog; without this, listing a page of N agents would fire
+// N identical customToolService.List calls. Pass a fresh cache per request; a nil
+// cache disables memoization.
+type customToolCache struct {
+	tools  []customToolModel.CustomToolResponse
+	err    error
+	loaded bool
+}
+
+func (s *agentService) listCustomTools(ctx context.Context, cache *customToolCache) ([]customToolModel.CustomToolResponse, error) {
+	if cache != nil && cache.loaded {
+		return cache.tools, cache.err
+	}
+
+	req := customToolModel.CustomToolListRequest{
+		Page:     1,
+		PageSize: 100,
+		Search:   "",
+	}
+	result, err := s.customToolService.List(ctx, req)
+
+	var tools []customToolModel.CustomToolResponse
+	if err == nil {
+		tools = result.Items
+	}
+
+	if cache != nil {
+		cache.tools, cache.err, cache.loaded = tools, err, true
+	}
+
+	return tools, err
+}
+
+// reconstructCustomConfigurations hydrates the agent config IN MEMORY ONLY.
+//
+// EVO-2126: it runs on reads (GetByID/List/folder-list) and used to persist the
+// expanded config, freezing a copy of the tool/MCP server (endpoint, headers, values)
+// inside the agent: editing it in the catalog never reached the agent, and deleting it
+// left the agent running the stale copy. The processor resolves the ids fresh at build
+// time (EVO-2125), so nothing needs the persisted copy.
+//
+// INVARIANT: nothing may write the agent back to the repository after this runs.
+// sanitizeAgent also persists (name/type fixes), so the read paths call it BEFORE this
+// one — otherwise its Update would carry the hydrated config back into the DB and
+// re-freeze the copy through the back door.
+func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agent *model.Agent, cache *customToolCache) error {
 	if agent.Config == "" {
 		return nil
 	}
@@ -268,17 +315,12 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 			}
 
 			if len(toolIDs) > 0 {
-				req := customToolModel.CustomToolListRequest{
-					Page:     1,
-					PageSize: 100,
-					Search:   "",
-				}
-				tools, err := s.customToolService.List(ctx, req)
+				tools, err := s.listCustomTools(ctx, cache)
 				if err != nil {
 					log.Printf("Error getting custom tools for agent %s: %v", agent.ID, err)
 				} else {
 					filteredTools := make([]interface{}, 0)
-					for _, tool := range tools.Items {
+					for _, tool := range tools {
 						for _, id := range toolIDs {
 							if tool.ID == id {
 								httpTool := s.customToolService.ConvertToHTTPTool(tool)
@@ -323,20 +365,39 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 	}
 
 	if reconstructed {
-		// EVO-2126: hydrate the response IN-MEMORY ONLY — never write it back.
-		// reconstructCustomConfigurations runs on reads (GetByID/List), so the previous
-		// agentRepository.Update froze a copy of the tool/MCP server (endpoint, headers,
-		// values) into the agent's config: editing it in the catalog never reached the
-		// agent, and deleting it left the agent running the stale copy. The processor
-		// resolves the ids fresh at build time (EVO-2125) and the frontend always sends
-		// custom_tools, so nothing needs the persisted copy. Mirrors the processor's
-		// _reconstruct_custom_configurations (in-memory only, never persisted).
 		agent.Config = stringutils.InterfaceMapToJSON(config)
 	}
 
 	return nil
 }
 
+// dropEmptyPlaceholder removes an empty expandable key so the hydration guard in
+// reconstructCustomConfigurations keeps firing while the matching *_ids list is set.
+func dropEmptyPlaceholder(target map[string]interface{}, key string, source map[string]interface{}, idsKey string) {
+	ids, ok := source[idsKey].([]interface{})
+	if !ok || len(ids) == 0 {
+		return
+	}
+
+	switch value := target[key].(type) {
+	case nil:
+		delete(target, key)
+	case []interface{}:
+		if len(value) == 0 {
+			delete(target, key)
+		}
+	case map[string]interface{}:
+		if len(value) == 0 {
+			delete(target, key)
+		}
+	}
+}
+
+// sanitizeAgent fixes an agent in place (invalid name, flow type without sub_agents)
+// and PERSISTS the fix. It must run BEFORE reconstructCustomConfigurations: its
+// agentRepository.Update writes the whole record (gorm Updates on a struct), so on a
+// hydrated config it would write the expanded tool copy back to the DB — exactly the
+// freeze EVO-2126 removes.
 func (s *agentService) sanitizeAgent(ctx context.Context, agent *model.Agent) error {
 	configUpdated := false
 
@@ -400,6 +461,14 @@ func (s *agentService) sanitizeAgent(ctx context.Context, agent *model.Agent) er
 				llmConfig["custom_mcp_servers"] = []interface{}{}
 			}
 
+			// EVO-2126: never leave an empty placeholder behind when the agent still has
+			// ids to expand. reconstructCustomConfigurations guards on key PRESENCE
+			// (`if _, hasTools := config["custom_tools"]; !hasTools`), so persisting an
+			// empty (or null) custom_tools would skip the expansion forever and the agent
+			// would silently lose its tools on every read.
+			dropEmptyPlaceholder(llmConfig, "custom_tools", config, "custom_tool_ids")
+			dropEmptyPlaceholder(llmConfig, "custom_mcp_servers", config, "custom_mcp_server_ids")
+
 			for key, value := range config {
 				if _, exists := llmConfig[key]; !exists && key != "sub_agents" {
 					llmConfig[key] = value
@@ -426,13 +495,14 @@ func (s *agentService) GetByID(ctx context.Context, id uuid.UUID) (*model.Agent,
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
-	if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-		log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-	}
-
+	// EVO-2126: sanitize (which persists) BEFORE hydrating, never after.
 	if err := s.sanitizeAgent(ctx, agent); err != nil {
 		log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
 		return nil, err
+	}
+
+	if err := s.reconstructCustomConfigurations(ctx, agent, nil); err != nil {
+		log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
 	}
 
 	return agent, nil
@@ -449,13 +519,16 @@ func (s *agentService) List(ctx context.Context, page int, pageSize int, filters
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
+	// EVO-2126: sanitize (which persists) BEFORE hydrating, never after. One shared
+	// tool cache per page so the hydration doesn't fire one catalog read per agent.
+	toolCache := &customToolCache{}
 	for i, agent := range agents {
-		if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-			continue
-		}
 		if err := s.sanitizeAgent(ctx, agent); err != nil {
 			log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+			continue
+		}
+		if err := s.reconstructCustomConfigurations(ctx, agent, toolCache); err != nil {
+			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
 			continue
 		}
 		agents[i] = agent
@@ -689,13 +762,16 @@ func (s *agentService) ListAgentsByFolderID(ctx context.Context, folderId uuid.U
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
+	// EVO-2126: sanitize (which persists) BEFORE hydrating, never after. One shared
+	// tool cache per page so the hydration doesn't fire one catalog read per agent.
+	toolCache := &customToolCache{}
 	for i, agent := range agents {
-		if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-			continue
-		}
 		if err := s.sanitizeAgent(ctx, agent); err != nil {
 			log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+			continue
+		}
+		if err := s.reconstructCustomConfigurations(ctx, agent, toolCache); err != nil {
+			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
 			continue
 		}
 		agents[i] = agent
