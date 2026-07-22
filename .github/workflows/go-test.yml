@@ -24,9 +24,11 @@ jobs:
 
       - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
-          # Same modfile the Dockerfile builds with: go.mod carries a `replace` for the
-          # enterprise SDK pointing at a sibling checkout that does not exist in CI.
-          go-version-file: go.community.mod
+          # setup-go only parses go.mod / .go-version here; both modfiles pin the same
+          # toolchain, so read the version from go.mod and pass the community modfile to
+          # the commands below (go.mod `replace`s the enterprise SDK to a sibling
+          # checkout that does not exist in CI).
+          go-version-file: go.mod
           cache-dependency-path: go.community.sum
 
       # Mirrors the image build (Dockerfile), so a red job here means a red image.
