@@ -1,12 +1,7 @@
 package service
 
-// EVO-2126: reconstructCustomConfigurations must hydrate the agent config in memory
-// only and never write it back. It runs on reads (GetByID/List); persisting froze a
-// copy of the tool into the agent so catalog edits/deletes never reached it.
-//
-// The read paths also call sanitizeAgent, which DOES persist (name/type fixes). It runs
-// BEFORE the hydration precisely so its Update can never carry the expanded copy back
-// into the DB — the tests below pin that ordering.
+// EVO-2126: the hydration must stay in memory. sanitizeAgent also persists, so the
+// read paths run it first — these tests pin both the invariant and that ordering.
 
 import (
 	"context"
@@ -23,7 +18,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeAgentRepo embeds the interface (nil) and records what Update persisted.
 type fakeAgentRepo struct {
 	repository.AgentRepository
 	stored          *model.Agent
@@ -41,7 +35,6 @@ func (f *fakeAgentRepo) Update(_ context.Context, agent *model.Agent, _ uuid.UUI
 	return agent, nil
 }
 
-// fakeCustomToolService embeds the interface (nil) and returns one tool by id.
 type fakeCustomToolService struct {
 	customTool.CustomToolService
 	tool      customToolModel.CustomToolResponse
@@ -57,7 +50,6 @@ func (f *fakeCustomToolService) ConvertToHTTPTool(tool customToolModel.CustomToo
 	return map[string]interface{}{"name": tool.Name, "endpoint": tool.Endpoint}
 }
 
-// fakeMCPServerService embeds the interface (nil) and returns one server by id.
 type fakeMCPServerService struct {
 	customMCPServer.CustomMcpServerService
 	server *mcpModel.CustomMcpServer
@@ -84,21 +76,17 @@ func TestReconstructCustomConfigurations_DoesNotPersist(t *testing.T) {
 		t.Fatalf("reconstructCustomConfigurations returned error: %v", err)
 	}
 
-	// The bug (EVO-2126): a read must never write a frozen copy back to the DB.
 	if repo.updateCalled {
 		t.Error("agentRepository.Update was called — reconstruct must be in-memory only, never persist")
 	}
 
-	// Behaviour preserved: the response is still hydrated in memory (fresh from the
-	// catalog on every read), so the API/frontend sees the expanded tool.
 	if !strings.Contains(agent.Config, "custom_tools") || !strings.Contains(agent.Config, "weather") {
 		t.Errorf("agent.Config was not hydrated in memory: %s", agent.Config)
 	}
 }
 
 func TestReconstructCustomConfigurations_SkipsWhenCustomToolsPresent(t *testing.T) {
-	// The frontend always sends custom_tools; the guard must skip expansion — it must
-	// not touch the repo, not read the catalog, and not alter the config it was given.
+	// The frontend always sends custom_tools, so the guard must skip the expansion.
 	repo := &fakeAgentRepo{}
 	tools := &fakeCustomToolService{tool: customToolModel.CustomToolResponse{ID: uuid.New(), Name: "weather", Endpoint: "https://x/api"}}
 	svc := &agentService{agentRepository: repo, customToolService: tools}
@@ -121,8 +109,7 @@ func TestReconstructCustomConfigurations_SkipsWhenCustomToolsPresent(t *testing.
 }
 
 func TestReconstructCustomConfigurations_MCPServers_DoesNotPersist(t *testing.T) {
-	// Same freeze bug on the MCP-server path: the write-back is a single shared block,
-	// so removing it must cover custom_mcp_server_ids too.
+	// The write-back was a single shared block, so the MCP path is covered too.
 	serverID := uuid.New()
 	repo := &fakeAgentRepo{}
 	svc := &agentService{
@@ -145,12 +132,9 @@ func TestReconstructCustomConfigurations_MCPServers_DoesNotPersist(t *testing.T)
 		t.Errorf("agent.Config MCP servers not hydrated in memory: %s", agent.Config)
 	}
 
-	// Pre-existing, NOT fixed here: model.CustomMcpServer tags every field `json:"-"`,
-	// so the branch marshals the servers to empty objects. The key lands, the data
-	// never does. Pinned so nobody reads the assertion above as proof that the MCP
-	// payload is populated. Fixing it means marshalling ToResponse() instead, which
-	// would newly expose the server Headers (auth tokens) in the agent read response —
-	// a payload/security decision outside this fix.
+	// Pre-existing, not fixed here: model.CustomMcpServer tags every field `json:"-"`,
+	// so the key lands but the data never does. Pinned so the assertion above is not
+	// read as proof that the MCP payload is populated.
 	if !strings.Contains(agent.Config, `"custom_mcp_servers":[{}]`) {
 		t.Errorf("expected the known-empty MCP payload; the branch changed shape: %s", agent.Config)
 	}
@@ -159,10 +143,8 @@ func TestReconstructCustomConfigurations_MCPServers_DoesNotPersist(t *testing.T)
 	}
 }
 
-// Exercises the real read path (GetByID) to pin the sanitize-then-hydrate ordering,
-// not just the two functions in isolation. sanitizeAgent persists (here: an invalid
-// name) and, while it ran AFTER the hydration, its Update wrote the expanded tool
-// (endpoint included) back into the DB — the same freeze, through the back door.
+// Drives the real GetByID: with the sanitize/hydrate order flipped, the name fix
+// persists the expanded tool and re-freezes the copy.
 func TestGetByID_NeverPersistsHydratedConfig(t *testing.T) {
 	toolID := uuid.New()
 	repo := &fakeAgentRepo{
@@ -189,15 +171,13 @@ func TestGetByID_NeverPersistsHydratedConfig(t *testing.T) {
 	if strings.Contains(repo.persistedConfig, "http_tools") || strings.Contains(repo.persistedConfig, "https://x/api") {
 		t.Errorf("the frozen copy leaked into the DB through sanitizeAgent: %s", repo.persistedConfig)
 	}
-	// ...while the response the caller gets is still hydrated.
 	if !strings.Contains(agent.Config, "weather") {
 		t.Errorf("response not hydrated: %s", agent.Config)
 	}
 }
 
-// A flow agent with no sub_agents is rewritten to LLM and persisted by sanitizeAgent.
-// It must not leave an empty custom_tools placeholder behind: the hydration guard keys
-// on presence, so the agent would silently lose its tools on every later read.
+// The flow-to-LLM rewrite must not persist an empty custom_tools placeholder: the
+// guard keys on presence, so the agent would lose its tools on every later read.
 func TestSanitizeAgent_KeepsIDBearingConfigExpandable(t *testing.T) {
 	toolID := uuid.New()
 	repo := &fakeAgentRepo{}
@@ -231,8 +211,7 @@ func TestSanitizeAgent_KeepsIDBearingConfigExpandable(t *testing.T) {
 	}
 }
 
-// Hydration is no longer persisted, so it re-reads the catalog on every read. Listing a
-// page must share one catalog read across all agents instead of firing one per agent.
+// A page of agents must share one catalog read instead of firing one per agent.
 func TestReconstructCustomConfigurations_SharesCatalogReadAcrossAgents(t *testing.T) {
 	toolID := uuid.New()
 	tools := &fakeCustomToolService{tool: customToolModel.CustomToolResponse{ID: toolID, Name: "weather", Endpoint: "https://x/api"}}
