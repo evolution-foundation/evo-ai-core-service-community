@@ -466,3 +466,27 @@ func testIsPublicIPBody(t *testing.T) {
 		}
 	}
 }
+
+// EVO-1738: the public TestPayload wrapper (test-before-save) runs the same request
+// as Test against an UNSAVED payload, and fails fast on an unsupported method.
+func TestTestPayload_UnsavedTool_RunsAndValidatesMethod(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	svc := &customToolService{}
+	res, err := svc.TestPayload(context.Background(), "get", srv.URL, nil, nil)
+	if err != nil {
+		t.Fatalf("TestPayload: %v", err)
+	}
+	if !res.Success || res.StatusCode != http.StatusOK {
+		t.Fatalf("want success 200, got success=%v code=%d err=%q", res.Success, res.StatusCode, res.Error)
+	}
+
+	if _, err := svc.TestPayload(context.Background(), "TRACE", srv.URL, nil, nil); err == nil {
+		t.Fatal("expected error for unsupported method")
+	}
+}

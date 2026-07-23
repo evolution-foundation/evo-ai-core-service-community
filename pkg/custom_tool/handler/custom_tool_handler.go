@@ -25,6 +25,7 @@ type CustomToolHandler interface {
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
 	Test(c *gin.Context)
+	TestPayload(c *gin.Context)
 }
 
 // customToolHandler implements the CustomToolHandler interface.
@@ -75,6 +76,10 @@ func (h *customToolHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			permissionMiddleware.RequirePermission("ai_custom_tools", "delete"),
 			h.Delete)
 
+		// EVO-1738: stateless test-before-save (validates the payload typed in the wizard).
+		customTools.POST("/test",
+			permissionMiddleware.RequirePermission("ai_custom_tools", "read"),
+			h.TestPayload)
 		// Test permissions
 		customTools.GET("/:id/test",
 			permissionMiddleware.RequirePermission("ai_custom_tools", "read"),
@@ -322,4 +327,27 @@ func (h *customToolHandler) Test(c *gin.Context) {
 	}
 
 	response.SuccessResponse(c, customTool, "Custom tool test completed successfully", http.StatusOK)
+}
+
+// TestPayload tests an UNSAVED tool payload (test-before-save). EVO-1738.
+func (h *customToolHandler) TestPayload(c *gin.Context) {
+	var req struct {
+		Method     string                 `json:"method" binding:"required"`
+		Endpoint   string                 `json:"endpoint" binding:"required"`
+		Headers    map[string]string      `json:"headers"`
+		BodyParams map[string]interface{} `json:"body_params"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ValidationErrorResponse(c, err)
+		return
+	}
+
+	testResult, err := h.customToolService.TestPayload(c.Request.Context(), req.Method, req.Endpoint, req.Headers, req.BodyParams)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	response.SuccessResponse(c, gin.H{"test_result": testResult}, "Custom tool test completed successfully", http.StatusOK)
 }

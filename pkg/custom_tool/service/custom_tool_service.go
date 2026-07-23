@@ -279,6 +279,9 @@ type CustomToolService interface {
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	ConvertToHTTPTool(tool model.CustomToolResponse) map[string]interface{}
 	Test(ctx context.Context, id uuid.UUID) (*model.CustomToolTestResponse, error)
+	// EVO-1738: stateless test of an UNSAVED tool payload (test-before-save in the
+	// wizard). Same SSRF-hardened runToolTest as Test, without requiring a saved tool.
+	TestPayload(ctx context.Context, method, endpoint string, headers map[string]string, bodyParams map[string]interface{}) (*model.TestResult, error)
 }
 
 type customToolService struct {
@@ -437,4 +440,18 @@ func (s *customToolService) Test(ctx context.Context, id uuid.UUID) (*model.Cust
 		Tool:       response,
 		TestResult: testResult,
 	}, nil
+}
+
+// TestPayload runs the SSRF-hardened tool request against an UNSAVED payload —
+// powers the wizard's "test before save" (EVO-1738).
+func (s *customToolService) TestPayload(ctx context.Context, method, endpoint string, headers map[string]string, bodyParams map[string]interface{}) (*model.TestResult, error) {
+	method = strings.ToUpper(method)
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead, http.MethodOptions:
+		// supported
+	default:
+		return nil, fmt.Errorf("unsupported method: %s", method)
+	}
+
+	return runToolTest(ctx, method, endpoint, headers, bodyParams), nil
 }
