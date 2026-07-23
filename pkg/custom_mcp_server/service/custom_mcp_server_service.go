@@ -26,6 +26,9 @@ type CustomMcpServerService interface {
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	GetByAgentConfig(ctx context.Context, serverIDs []uuid.UUID) ([]*model.CustomMcpServer, error)
 	Test(ctx context.Context, id uuid.UUID) (*model.CustomMcpServerTestResponse, error)
+	// EVO-1739: stateless test of an UNSAVED server's url/headers, so the wizard can
+	// "test before save". Reuses the same processor MCP handshake as Test.
+	TestConnection(ctx context.Context, url string, headers map[string]string) (*model.TestResult, error)
 }
 
 type customMcpServerService struct {
@@ -210,6 +213,12 @@ func (s *customMcpServerService) Test(ctx context.Context, id uuid.UUID) (*model
 		Server:     customMcpServer.ToResponse(),
 		TestResult: testResult,
 	}, nil
+}
+
+// TestConnection runs the MCP handshake against arbitrary url/headers without a saved
+// server — powers the wizard's "test before save" (EVO-1739).
+func (s *customMcpServerService) TestConnection(ctx context.Context, url string, headers map[string]string) (*model.TestResult, error) {
+	return s.testConnection(ctx, url, headers)
 }
 
 // EVO-2139: delegate the MCP connection test to the processor, which owns

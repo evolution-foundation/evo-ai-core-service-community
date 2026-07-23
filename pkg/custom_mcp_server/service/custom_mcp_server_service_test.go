@@ -150,6 +150,25 @@ func TestTestConnection_DelegatesToProcessor(t *testing.T) {
 // EVO-2139: propagate X-Evo-Tenant-Id on the test call too, so the
 // processor's runtime_context middleware (PY-1) can authorize it.
 // Paridade com TestDiscoverTools_PropagatesTenantHeader_WhenBound.
+// EVO-1739: the public TestConnection wrapper (test-before-save) must delegate to the
+// same processor handshake and surface the TestResult unchanged.
+func TestTestConnection_PublicWrapper_DelegatesAndReturnsResult(t *testing.T) {
+	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"response_time":0.1,"url_tested":"https://mcp.example/mcp","message":"ok","tools_count":2}`)
+	svc := newServiceForTest(cs.URL)
+	ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+	result, err := svc.TestConnection(ctx, "https://mcp.example/mcp", map[string]string{})
+	if err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if want := "/api/v1/custom-mcp-servers/test-connection"; cs.gotPath != want {
+		t.Fatalf("path: got %q want %q", cs.gotPath, want)
+	}
+	if !result.Success || result.StatusCode != http.StatusOK {
+		t.Fatalf("want success 200, got success=%v code=%d", result.Success, result.StatusCode)
+	}
+}
+
 func TestTestConnection_PropagatesTenantHeader_WhenBound(t *testing.T) {
 	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":0}`)
 	svc := newServiceForTest(cs.URL)
