@@ -147,9 +147,6 @@ func TestTestConnection_DelegatesToProcessor(t *testing.T) {
 	}
 }
 
-// EVO-2139: propagate X-Evo-Tenant-Id on the test call too, so the
-// processor's runtime_context middleware (PY-1) can authorize it.
-// Paridade com TestDiscoverTools_PropagatesTenantHeader_WhenBound.
 // EVO-1739: the public TestConnection wrapper (test-before-save) must delegate to the
 // same processor handshake and surface the TestResult unchanged.
 func TestTestConnection_PublicWrapper_DelegatesAndReturnsResult(t *testing.T) {
@@ -169,6 +166,60 @@ func TestTestConnection_PublicWrapper_DelegatesAndReturnsResult(t *testing.T) {
 	}
 }
 
+// EVO-1739: the url reaches the processor's outbound HTTP client, so a caller must not
+// be able to hand it a non-http(s) scheme or a hostless URL. Rejection happens before
+// any request goes out — asserted by the processor stub never being hit.
+func TestTestConnection_RejectsNonHTTPURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"empty", ""},
+		{"blank", "   "},
+		{"file scheme", "file:///etc/passwd"},
+		{"gopher scheme", "gopher://internal:70/_dict"},
+		{"no scheme", "mcp.example/mcp"},
+		{"scheme without host", "http:///mcp"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":0}`)
+			svc := newServiceForTest(cs.URL)
+			ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+			result, err := svc.TestConnection(ctx, tc.url, map[string]string{})
+			if err == nil {
+				t.Fatalf("TestConnection(%q): want a validation error, got result %+v", tc.url, result)
+			}
+			if result != nil {
+				t.Fatalf("TestConnection(%q): want nil result alongside the error, got %+v", tc.url, result)
+			}
+			if cs.gotPath != "" {
+				t.Fatalf("TestConnection(%q): processor was called at %q — the url must be rejected before any outbound request", tc.url, cs.gotPath)
+			}
+		})
+	}
+}
+
+// EVO-1739: a plain http URL is legitimate — self-hosted MCP servers routinely sit on
+// the same private network, so validation must not degrade into a private-IP blocklist.
+func TestTestConnection_AllowsPlainHTTPAndPrivateHosts(t *testing.T) {
+	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":1}`)
+	svc := newServiceForTest(cs.URL)
+	ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+	if _, err := svc.TestConnection(ctx, "http://mcp.internal:8080/mcp", map[string]string{}); err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if cs.gotPath == "" {
+		t.Fatal("processor was not called for a valid private-network http URL")
+	}
+}
+
+// EVO-2139: propagate X-Evo-Tenant-Id on the test call too, so the
+// processor's runtime_context middleware (PY-1) can authorize it.
+// Paridade com TestDiscoverTools_PropagatesTenantHeader_WhenBound.
 func TestTestConnection_PropagatesTenantHeader_WhenBound(t *testing.T) {
 	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":0}`)
 	svc := newServiceForTest(cs.URL)

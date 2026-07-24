@@ -81,8 +81,14 @@ func (h *customMcpServerHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			permissionMiddleware.RequirePermission("ai_custom_mcp_servers", "read"),
 			h.Test)
 		// EVO-1739: stateless test-before-save (validates url/headers typed in the wizard).
+		// Gated on `create`, NOT `read`: unlike GET /:id/test — which can only reach a URL
+		// somebody with `create` already persisted — this drives an arbitrary outbound
+		// request from the processor with caller-supplied url/headers and returns the
+		// status code, latency and error back. Under `read` that hands every read-only
+		// user an SSRF probe against the internal network. `create` is the permission that
+		// already grants "point the processor at a URL of my choosing".
 		customMcpServers.POST("/test-connection",
-			permissionMiddleware.RequirePermission("ai_custom_mcp_servers", "read"),
+			permissionMiddleware.RequirePermission("ai_custom_mcp_servers", "create"),
 			h.TestConnection)
 	}
 }

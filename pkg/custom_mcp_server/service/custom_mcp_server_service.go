@@ -5,6 +5,7 @@ import (
 	"errors"
 	"evo-ai-core-service/internal/config"
 	"evo-ai-core-service/internal/httpclient"
+	apierrors "evo-ai-core-service/internal/httpclient/errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/contextutils"
 	"evo-ai-core-service/internal/utils/stringutils"
@@ -14,6 +15,8 @@ import (
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
 	"fmt"
 	"net/http"
+	neturl "net/url"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -217,8 +220,38 @@ func (s *customMcpServerService) Test(ctx context.Context, id uuid.UUID) (*model
 
 // TestConnection runs the MCP handshake against arbitrary url/headers without a saved
 // server — powers the wizard's "test before save" (EVO-1739).
-func (s *customMcpServerService) TestConnection(ctx context.Context, url string, headers map[string]string) (*model.TestResult, error) {
-	return s.testConnection(ctx, url, headers)
+//
+// The url is caller-supplied and reaches the processor's outbound HTTP client, so it is
+// validated here rather than only at the handler: it must be an absolute http/https URL
+// with a host. That rejects `file://`, `gopher://` and friends outright. We deliberately
+// do NOT blocklist private/loopback addresses — a self-hosted Evolution routinely runs
+// its MCP servers on the same private network, so that would break the common case.
+func (s *customMcpServerService) TestConnection(ctx context.Context, rawURL string, headers map[string]string) (*model.TestResult, error) {
+	if err := validateTestConnectionURL(rawURL); err != nil {
+		return nil, err
+	}
+	return s.testConnection(ctx, rawURL, headers)
+}
+
+// validateTestConnectionURL enforces the shape of a testable MCP endpoint.
+func validateTestConnectionURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return apierrors.New(apierrors.ValidationError, "url is required", http.StatusBadRequest)
+	}
+
+	parsed, err := neturl.Parse(trimmed)
+	if err != nil {
+		return apierrors.New(apierrors.ValidationError, "url is not a valid URL", http.StatusBadRequest)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return apierrors.New(apierrors.ValidationError, "url must use the http or https scheme", http.StatusBadRequest)
+	}
+	if parsed.Host == "" {
+		return apierrors.New(apierrors.ValidationError, "url must include a host", http.StatusBadRequest)
+	}
+
+	return nil
 }
 
 // EVO-2139: delegate the MCP connection test to the processor, which owns
