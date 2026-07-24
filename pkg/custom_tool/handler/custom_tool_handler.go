@@ -77,8 +77,12 @@ func (h *customToolHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			h.Delete)
 
 		// EVO-1738: stateless test-before-save (validates the payload typed in the wizard).
+		// Gated on "create", NOT "read": unlike GET /:id/test — which only replays a tool
+		// someone with create rights already authored — this takes method/endpoint/headers
+		// straight from the request body, so a read-only user would otherwise gain an
+		// arbitrary server-side HTTP fetcher (our egress, our IP, our network position).
 		customTools.POST("/test",
-			permissionMiddleware.RequirePermission("ai_custom_tools", "read"),
+			permissionMiddleware.RequirePermission("ai_custom_tools", "create"),
 			h.TestPayload)
 		// Test permissions
 		customTools.GET("/:id/test",
@@ -331,18 +335,13 @@ func (h *customToolHandler) Test(c *gin.Context) {
 
 // TestPayload tests an UNSAVED tool payload (test-before-save). EVO-1738.
 func (h *customToolHandler) TestPayload(c *gin.Context) {
-	var req struct {
-		Method     string                 `json:"method" binding:"required"`
-		Endpoint   string                 `json:"endpoint" binding:"required"`
-		Headers    map[string]string      `json:"headers"`
-		BodyParams map[string]interface{} `json:"body_params"`
-	}
+	var req model.CustomToolTestPayloadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ValidationErrorResponse(c, err)
 		return
 	}
 
-	testResult, err := h.customToolService.TestPayload(c.Request.Context(), req.Method, req.Endpoint, req.Headers, req.BodyParams)
+	testResult, err := h.customToolService.TestPayload(c.Request.Context(), req)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)

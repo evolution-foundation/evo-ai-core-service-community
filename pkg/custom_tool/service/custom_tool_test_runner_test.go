@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	apiErrors "evo-ai-core-service/internal/httpclient/errors"
+	model "evo-ai-core-service/pkg/custom_tool/model"
 	"io"
 	"net"
 	"net/http"
@@ -478,7 +481,10 @@ func TestTestPayload_UnsavedTool_RunsAndValidatesMethod(t *testing.T) {
 	defer srv.Close()
 
 	svc := &customToolService{}
-	res, err := svc.TestPayload(context.Background(), "get", srv.URL, nil, nil)
+	res, err := svc.TestPayload(context.Background(), model.CustomToolTestPayloadRequest{
+		Method:   "get",
+		Endpoint: srv.URL,
+	})
 	if err != nil {
 		t.Fatalf("TestPayload: %v", err)
 	}
@@ -486,7 +492,91 @@ func TestTestPayload_UnsavedTool_RunsAndValidatesMethod(t *testing.T) {
 		t.Fatalf("want success 200, got success=%v code=%d err=%q", res.Success, res.StatusCode, res.Error)
 	}
 
-	if _, err := svc.TestPayload(context.Background(), "TRACE", srv.URL, nil, nil); err == nil {
+	_, err = svc.TestPayload(context.Background(), model.CustomToolTestPayloadRequest{
+		Method:   "TRACE",
+		Endpoint: srv.URL,
+	})
+	if err == nil {
 		t.Fatal("expected error for unsupported method")
 	}
+	// R1 review: an unsupported method is caller input — it must map to 400, not 500.
+	var apiErr *apiErrors.ApiError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("want *ApiError, got %T", err)
+	}
+	if apiErr.HTTPCode != http.StatusBadRequest {
+		t.Fatalf("want HTTP 400 for unsupported method, got %d", apiErr.HTTPCode)
+	}
+}
+
+// R1 review (EVO-1738): the tool's path placeholders and query params must reach the
+// wire. Before resolveToolURL the test hit `/users/{user_id}` literally and dropped
+// query params entirely, so "Request OK — HTTP 200" could describe a request that
+// carried none of the user's configuration.
+func TestTestPayload_AppliesPathAndQueryParams(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query().Encode()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	svc := &customToolService{}
+	res, err := svc.TestPayload(context.Background(), model.CustomToolTestPayloadRequest{
+		Method:      "GET",
+		Endpoint:    srv.URL + "/users/{user_id}/posts",
+		PathParams:  map[string]string{"user_id": "42"},
+		QueryParams: map[string]interface{}{"limit": 10, "q": "hello world"},
+	})
+	if err != nil {
+		t.Fatalf("TestPayload: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("want success, got err=%q", res.Error)
+	}
+	if gotPath != "/users/42/posts" {
+		t.Fatalf("path placeholder not substituted: got %q", gotPath)
+	}
+	if gotQuery != "limit=10&q=hello+world" {
+		t.Fatalf("query params not applied: got %q", gotQuery)
+	}
+}
+
+// R1 review: a path placeholder must not become an SSRF bypass. Two layers hold:
+// the value is percent-escaped, so it cannot introduce a scheme/authority; and
+// validateEndpoint runs on the RESOLVED url, so anything that did slip through
+// would still face the public-IP gate.
+func TestResolveToolURL_PlaceholderCannotInjectAHost(t *testing.T) {
+	if got := resolveToolURL("https://x.test/{p}", map[string]string{"p": "a b"}, nil); got != "https://x.test/a%20b" {
+		t.Fatalf("path value not escaped: got %q", got)
+	}
+
+	// The classic metadata-endpoint attempt: escaping neuters "://" so no authority
+	// is ever produced — the value stays an opaque path segment.
+	resolved := resolveToolURL("{host}/latest/meta-data/", map[string]string{"host": "http://169.254.169.254"}, nil)
+	if strings.Contains(resolved, "//169.254.169.254") {
+		t.Fatalf("placeholder injected an authority: %q", resolved)
+	}
+
+	svc := &customToolService{}
+	res, err := svc.TestPayload(context.Background(), model.CustomToolTestPayloadRequest{
+		Method:     "GET",
+		Endpoint:   "{host}/latest/meta-data/",
+		PathParams: map[string]string{"host": "http://169.254.169.254"},
+	})
+	if err != nil {
+		t.Fatalf("TestPayload: %v", err)
+	}
+	if res.Success {
+		t.Fatalf("placeholder-built internal URL was not blocked: err=%q", res.Error)
+	}
+
+	// And a literal internal endpoint still trips the public-IP gate itself.
+	withSSRFGuard(t, func() {
+		blocked := runToolTest(context.Background(), "GET", "http://169.254.169.254/latest/meta-data/", nil, nil)
+		if blocked.Success || blocked.Error != errBlockedHost.Error() {
+			t.Fatalf("want blocked-host error, got success=%v err=%q", blocked.Success, blocked.Error)
+		}
+	})
 }

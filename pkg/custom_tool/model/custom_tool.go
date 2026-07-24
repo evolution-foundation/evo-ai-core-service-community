@@ -111,6 +111,18 @@ type CustomToolTestResponse struct {
 	TestResult *TestResult         `json:"test_result"`
 }
 
+// CustomToolTestPayloadRequest is an UNSAVED tool config to run once (EVO-1738,
+// test-before-save). Mirrors the request-shaping fields of CustomToolBase so the
+// wizard's test hits exactly the URL the saved tool would.
+type CustomToolTestPayloadRequest struct {
+	Method      string                 `json:"method" binding:"required"`
+	Endpoint    string                 `json:"endpoint" binding:"required"`
+	Headers     map[string]string      `json:"headers"`
+	PathParams  map[string]string      `json:"path_params"`
+	QueryParams map[string]interface{} `json:"query_params"`
+	BodyParams  map[string]interface{} `json:"body_params"`
+}
+
 type CustomToolListResponse struct {
 	Items      []CustomToolResponse `json:"-"`
 	Page       int                  `json:"-"`

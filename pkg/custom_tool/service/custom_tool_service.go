@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	apiErrors "evo-ai-core-service/internal/httpclient/errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/stringutils"
 	model "evo-ai-core-service/pkg/custom_tool/model"
 	repository "evo-ai-core-service/pkg/custom_tool/repository"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -165,9 +166,59 @@ var testHTTPClient = &http.Client{
 	},
 }
 
+// toQueryValue renders a query-param value as a string. Scalars go verbatim;
+// objects/arrays are JSON-encoded so we never emit Go's map[k:v] syntax.
+func toQueryValue(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case map[string]interface{}, []interface{}:
+		if buf, err := json.Marshal(t); err == nil {
+			return string(buf)
+		}
+		return fmt.Sprintf("%v", t)
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+// resolveToolURL applies the tool's path placeholders and query params to the raw
+// endpoint, yielding the URL the tool actually calls. Without this the test ran a
+// bare endpoint — `/users/{user_id}` was requested literally and query params were
+// dropped, so the result did not reflect the configured tool.
+//
+// Safe by construction: the result is fed to runToolTest, which runs
+// validateEndpoint on the FINAL url — so a placeholder that expands into an
+// internal host is still caught by the SSRF gate.
+func resolveToolURL(endpoint string, pathParams map[string]string, queryParams map[string]interface{}) string {
+	resolved := endpoint
+	for k, v := range pathParams {
+		resolved = strings.ReplaceAll(resolved, "{"+k+"}", url.PathEscape(v))
+	}
+
+	if len(queryParams) == 0 {
+		return resolved
+	}
+
+	u, err := url.Parse(strings.TrimSpace(resolved))
+	if err != nil {
+		// Let validateEndpoint produce the user-facing parse error.
+		return resolved
+	}
+	q := u.Query()
+	for k, v := range queryParams {
+		q.Set(k, toQueryValue(v))
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // runToolTest issues the HTTP request described by the tool and returns a
 // TestResult reflecting what actually happened: real status code, response
 // time, headers, body. Success = HTTP 2xx (not body parseability).
+// `endpoint` must already be resolved (see resolveToolURL).
 func runToolTest(
 	ctx context.Context,
 	method, endpoint string,
@@ -281,7 +332,7 @@ type CustomToolService interface {
 	Test(ctx context.Context, id uuid.UUID) (*model.CustomToolTestResponse, error)
 	// EVO-1738: stateless test of an UNSAVED tool payload (test-before-save in the
 	// wizard). Same SSRF-hardened runToolTest as Test, without requiring a saved tool.
-	TestPayload(ctx context.Context, method, endpoint string, headers map[string]string, bodyParams map[string]interface{}) (*model.TestResult, error)
+	TestPayload(ctx context.Context, req model.CustomToolTestPayloadRequest) (*model.TestResult, error)
 }
 
 type customToolService struct {
@@ -423,18 +474,20 @@ func (s *customToolService) Test(ctx context.Context, id uuid.UUID) (*model.Cust
 	}
 
 	response := customTool.ToResponse()
-	method := strings.ToUpper(customTool.Method)
 
-	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead, http.MethodOptions:
-		// supported
-	default:
-		return nil, fmt.Errorf("unsupported method: %s", customTool.Method)
+	method, err := normalizeToolMethod(customTool.Method)
+	if err != nil {
+		return nil, err
 	}
 
 	headers := stringutils.JSONToStringMap(customTool.Headers)
 	bodyParams := stringutils.JSONToInterfaceMap(customTool.BodyParams)
-	testResult := runToolTest(ctx, method, customTool.Endpoint, headers, bodyParams)
+	endpoint := resolveToolURL(
+		customTool.Endpoint,
+		stringutils.JSONToStringMap(customTool.PathParams),
+		stringutils.JSONToInterfaceMap(customTool.QueryParams),
+	)
+	testResult := runToolTest(ctx, method, endpoint, headers, bodyParams)
 
 	return &model.CustomToolTestResponse{
 		Tool:       response,
@@ -442,16 +495,31 @@ func (s *customToolService) Test(ctx context.Context, id uuid.UUID) (*model.Cust
 	}, nil
 }
 
+// normalizeToolMethod upper-cases the method and enforces the allowlist, shared by
+// the saved-tool test and the stateless payload test so the two cannot drift.
+// Returns a BadRequest ApiError — an unsupported method is caller input, not a 500.
+func normalizeToolMethod(method string) (string, error) {
+	upper := strings.ToUpper(strings.TrimSpace(method))
+	switch upper {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead, http.MethodOptions:
+		return upper, nil
+	default:
+		return "", apiErrors.New(
+			apiErrors.InvalidInput,
+			fmt.Sprintf("unsupported method: %s", method),
+			http.StatusBadRequest,
+		)
+	}
+}
+
 // TestPayload runs the SSRF-hardened tool request against an UNSAVED payload —
 // powers the wizard's "test before save" (EVO-1738).
-func (s *customToolService) TestPayload(ctx context.Context, method, endpoint string, headers map[string]string, bodyParams map[string]interface{}) (*model.TestResult, error) {
-	method = strings.ToUpper(method)
-	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead, http.MethodOptions:
-		// supported
-	default:
-		return nil, fmt.Errorf("unsupported method: %s", method)
+func (s *customToolService) TestPayload(ctx context.Context, req model.CustomToolTestPayloadRequest) (*model.TestResult, error) {
+	method, err := normalizeToolMethod(req.Method)
+	if err != nil {
+		return nil, err
 	}
 
-	return runToolTest(ctx, method, endpoint, headers, bodyParams), nil
+	endpoint := resolveToolURL(req.Endpoint, req.PathParams, req.QueryParams)
+	return runToolTest(ctx, method, endpoint, req.Headers, req.BodyParams), nil
 }
