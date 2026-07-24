@@ -25,6 +25,7 @@ type CustomMcpServerHandler interface {
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
 	Test(c *gin.Context)
+	TestConnection(c *gin.Context)
 }
 
 // customMcpServerHandler implements the CustomMcpServerHandler interface.
@@ -79,6 +80,12 @@ func (h *customMcpServerHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 		customMcpServers.GET("/:id/test",
 			permissionMiddleware.RequirePermission("ai_custom_mcp_servers", "read"),
 			h.Test)
+		// EVO-1739: stateless test-before-save (validates url/headers typed in the wizard).
+		// `create`, not `read`: it fires an outbound request from the processor to a
+		// caller-supplied url and reports the outcome. `read` must not grant that.
+		customMcpServers.POST("/test-connection",
+			permissionMiddleware.RequirePermission("ai_custom_mcp_servers", "create"),
+			h.TestConnection)
 	}
 }
 
@@ -308,4 +315,25 @@ func (h *customMcpServerHandler) Test(c *gin.Context) {
 	}
 
 	response.SuccessResponse(c, customMcpServer, "Custom MCP server test completed successfully", http.StatusOK)
+}
+
+// TestConnection tests an UNSAVED MCP server's url/headers (test-before-save). EVO-1739.
+func (h *customMcpServerHandler) TestConnection(c *gin.Context) {
+	var req struct {
+		URL     string            `json:"url" binding:"required"`
+		Headers map[string]string `json:"headers"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ValidationErrorResponse(c, err)
+		return
+	}
+
+	testResult, err := h.customMcpServerService.TestConnection(c.Request.Context(), req.URL, req.Headers)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	response.SuccessResponse(c, gin.H{"test_result": testResult}, "Custom MCP server test completed successfully", http.StatusOK)
 }
