@@ -166,9 +166,8 @@ func TestTestConnection_PublicWrapper_DelegatesAndReturnsResult(t *testing.T) {
 	}
 }
 
-// EVO-1739: the url reaches the processor's outbound HTTP client, so a caller must not
-// be able to hand it a non-http(s) scheme or a hostless URL. Rejection happens before
-// any request goes out — asserted by the processor stub never being hit.
+// EVO-1739: bad schemes and hostless urls are rejected before any request goes out —
+// asserted by the processor stub never being hit.
 func TestTestConnection_RejectsNonHTTPURLs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -202,8 +201,8 @@ func TestTestConnection_RejectsNonHTTPURLs(t *testing.T) {
 	}
 }
 
-// EVO-1739: a plain http URL is legitimate — self-hosted MCP servers routinely sit on
-// the same private network, so validation must not degrade into a private-IP blocklist.
+// EVO-1739: guards against the validation degrading into a private-IP blocklist —
+// self-hosted MCP servers routinely sit on the same private network.
 func TestTestConnection_AllowsPlainHTTPAndPrivateHosts(t *testing.T) {
 	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":1}`)
 	svc := newServiceForTest(cs.URL)

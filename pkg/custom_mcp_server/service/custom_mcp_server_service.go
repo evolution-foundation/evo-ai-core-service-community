@@ -220,12 +220,6 @@ func (s *customMcpServerService) Test(ctx context.Context, id uuid.UUID) (*model
 
 // TestConnection runs the MCP handshake against arbitrary url/headers without a saved
 // server — powers the wizard's "test before save" (EVO-1739).
-//
-// The url is caller-supplied and reaches the processor's outbound HTTP client, so it is
-// validated here rather than only at the handler: it must be an absolute http/https URL
-// with a host. That rejects `file://`, `gopher://` and friends outright. We deliberately
-// do NOT blocklist private/loopback addresses — a self-hosted Evolution routinely runs
-// its MCP servers on the same private network, so that would break the common case.
 func (s *customMcpServerService) TestConnection(ctx context.Context, rawURL string, headers map[string]string) (*model.TestResult, error) {
 	if err := validateTestConnectionURL(rawURL); err != nil {
 		return nil, err
@@ -233,7 +227,9 @@ func (s *customMcpServerService) TestConnection(ctx context.Context, rawURL stri
 	return s.testConnection(ctx, rawURL, headers)
 }
 
-// validateTestConnectionURL enforces the shape of a testable MCP endpoint.
+// validateTestConnectionURL requires an absolute http/https url with a host, since the
+// caller supplies it and the processor dials it. No private/loopback blocklist: a
+// self-hosted Evolution normally runs its MCP servers on the same private network.
 func validateTestConnectionURL(rawURL string) error {
 	trimmed := strings.TrimSpace(rawURL)
 	if trimmed == "" {

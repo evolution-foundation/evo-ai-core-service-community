@@ -15,14 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// EVO-1739: the test-before-save handler is the only entry point that accepts a
-// caller-supplied url, so its binding and its pass-through of the service error must be
-// covered. The handler package had no tests at all before this.
-
-// testConnectionStub records what the handler forwarded and replays a canned outcome.
-// The service interface is embedded as a nil value so the stub satisfies it while only
-// implementing the one method this handler calls — any other call panics loudly, which
-// is the correct outcome for a test that should never make one.
+// EVO-1739: covers the test-before-save handler — the only route taking a caller-supplied
+// url. Embeds the service interface as nil, so any call other than TestConnection panics.
 type testConnectionStub struct {
 	service.CustomMcpServerService
 
@@ -80,7 +74,7 @@ func TestTestConnectionHandler_ForwardsURLAndHeaders(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode: %v (body %s)", err, w.Body.String())
 	}
-	// The frontend reads `data.test_result.tools_count` — pin the shape.
+	// Pins the shape the frontend reads: data.test_result.tools_count.
 	if !envelope.Data.TestResult.Success || envelope.Data.TestResult.ToolsCount != 4 {
 		t.Fatalf("test_result: got %+v", envelope.Data.TestResult)
 	}
@@ -102,8 +96,7 @@ func TestTestConnectionHandler_RejectsMissingURL(t *testing.T) {
 func TestTestConnectionHandler_RejectsNonStringHeaderValues(t *testing.T) {
 	stub := &testConnectionStub{result: &model.TestResult{Success: true}}
 
-	// The wizard's advanced-JSON mode can produce this; it must fail as a 400 rather
-	// than reaching the service.
+	// The wizard's advanced-JSON mode can produce this; must 400, not reach the service.
 	w := doTestConnection(t, stub, `{"url":"https://mcp.example/mcp","headers":{"X-Api-Key":123}}`)
 
 	if w.Code != http.StatusBadRequest {
@@ -126,8 +119,7 @@ func TestTestConnectionHandler_PropagatesServiceValidationError(t *testing.T) {
 	}
 }
 
-// A failed handshake is still a successful call: the failure lives inside test_result,
-// so the wizard can render "connection failed" instead of a network error.
+// A failed handshake is still a successful call — the failure lives inside test_result.
 func TestTestConnectionHandler_FailedHandshakeIsStill200(t *testing.T) {
 	stub := &testConnectionStub{
 		result: &model.TestResult{Success: false, StatusCode: http.StatusBadGateway, Error: "connection refused"},
