@@ -9,20 +9,26 @@ import "testing"
 //
 // This is the same defect that bit story 2.3 on agent integrations, in a second
 // location: tools and MCP servers replace `headers` wholesale on update.
-func TestKeepMissingRestoresOmittedEntries(t *testing.T) {
+// The round-trip a screen actually performs: RedactValues sends every NAME with
+// a blanked value, the screen edits an unrelated field and posts the object
+// back. The blanks must not erase the stored secrets.
+//
+// (This test used to feed an incoming map with the secret names ABSENT, which
+// described the older redaction that dropped the keys entirely. Now that names
+// always come back, absence means deletion, covered separately below.)
+func TestKeepMissingRestoresRedactedEntries(t *testing.T) {
 	stored := map[string]string{
 		"Authorization": "Bearer sk-secreto",
 		"X-Api-Key":     "chave-secreta",
 		"Content-Type":  "application/json",
 	}
-	// What a screen sends back after a sanitized GET: the secret headers are
-	// simply absent.
-	incoming := map[string]string{"Content-Type": "application/xml"}
+	incoming := RedactValues(stored)
+	incoming["Content-Type"] = "application/xml"
 
 	merged := KeepMissing(incoming, stored)
 
 	if merged["Authorization"] != "Bearer sk-secreto" {
-		t.Errorf("Authorization was erased by a save that never carried it: %q", merged["Authorization"])
+		t.Errorf("Authorization was erased by the redacted echo: %q", merged["Authorization"])
 	}
 	if merged["X-Api-Key"] != "chave-secreta" {
 		t.Errorf("X-Api-Key was erased: %q", merged["X-Api-Key"])
@@ -144,5 +150,47 @@ func TestRedactValuesKeepsOnlySafeHeaders(t *testing.T) {
 func TestRedactValuesHandlesNil(t *testing.T) {
 	if redacted := RedactValues(nil); redacted == nil {
 		t.Error("RedactValues(nil) returned nil instead of an empty map")
+	}
+}
+
+// Removing a header must actually remove it.
+//
+// The redaction blanks VALUES but always sends the NAMES, so an absent key is
+// unambiguous user intent: the row was deleted in the editor. Restoring every
+// absent key made deletion impossible — the header came back on reload, for
+// auth and non-auth names alike, with no UI affordance able to shed it.
+func TestKeepMissingLetsAHeaderBeDeleted(t *testing.T) {
+	stored := map[string]string{
+		"Authorization": "Bearer secreto",
+		"Content-Type":  "application/json",
+	}
+	// The editor kept Content-Type and removed the Authorization row entirely.
+	incoming := map[string]string{"Content-Type": "application/json"}
+
+	merged := KeepMissing(incoming, stored)
+
+	if _, present := merged["Authorization"]; present {
+		t.Errorf("a deleted header was restored: %v", merged)
+	}
+	if merged["Content-Type"] != "application/json" {
+		t.Errorf("the kept header was lost: %v", merged)
+	}
+}
+
+// The redacted echo still has to be preserved: a blank under a redacted NAME is
+// our own redaction coming back, not a request to clear.
+func TestKeepMissingStillPreservesTheRedactedEchoWhileAllowingDeletion(t *testing.T) {
+	stored := map[string]string{"Authorization": "Bearer secreto", "X-Api-Key": "chave"}
+	// The screen returns what it received: names present, values blanked. It
+	// deleted X-Api-Key.
+	incoming := map[string]string{"Authorization": ""}
+
+	merged := KeepMissing(incoming, stored)
+
+	if merged["Authorization"] != "Bearer secreto" {
+		t.Errorf("the redacted echo erased the stored secret: %q", merged["Authorization"])
+	}
+	if _, present := merged["X-Api-Key"]; present {
+		t.Error("the deleted header was restored")
 	}
 }

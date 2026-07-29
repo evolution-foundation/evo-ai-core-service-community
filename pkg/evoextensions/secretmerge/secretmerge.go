@@ -55,12 +55,10 @@ func KeepMissing(incoming, stored map[string]string) map[string]string {
 		merged[key] = value
 	}
 
-	for key, value := range stored {
-		if _, present := merged[key]; !present {
-			merged[key] = value
-		}
-	}
-
+	// An ABSENT key is deletion, not omission: RedactValues blanks values but
+	// always returns the names, so a screen that round-trips what it received
+	// sends every stored name back. Restoring absent keys here made a header
+	// impossible to delete — it simply reappeared on reload.
 	return merged
 }
 
