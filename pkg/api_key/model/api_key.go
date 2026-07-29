@@ -11,15 +11,17 @@ import (
 type ApiKey struct {
 	tenantfield.TenantField
 
-	ID        uuid.UUID `json:"-" gorm:"<-:create;type:uuid;primary_key;default:uuid_generate_v4()"`
-	Name      string    `json:"-" gorm:"not null; type:varchar(255)"`
-	Provider  string    `json:"-" gorm:"not null; type:varchar(255)"`
-	Key       string    `json:"-" gorm:"not null; type:text"`
-	KeyHint   string    `json:"-" gorm:"not null; type:varchar(8);default:''"`
-	Scope     string    `json:"-" gorm:"not null; type:varchar(32);default:'account'"`
-	IsActive  bool      `json:"-" gorm:"not null; type:boolean;default:true"`
-	CreatedAt time.Time `json:"-" gorm:"autoCreateTime;not null" default:"now()"`
-	UpdatedAt time.Time `json:"-" gorm:"autoUpdateTime;not null" default:"now()"`
+	ID       uuid.UUID `json:"-" gorm:"<-:create;type:uuid;primary_key;default:uuid_generate_v4()"`
+	Name     string    `json:"-" gorm:"not null; type:varchar(255)"`
+	Provider string    `json:"-" gorm:"not null; type:varchar(255)"`
+	Key      string    `json:"-" gorm:"not null; type:text"`
+	KeyHint  string    `json:"-" gorm:"not null; type:varchar(8);default:''"`
+	Scope    string    `json:"-" gorm:"not null; type:varchar(32);default:'account'"`
+	// Set only by the 1.5 migration; nil for credentials a human registered.
+	ImportedFrom *string   `json:"-" gorm:"type:varchar(64)"`
+	IsActive     bool      `json:"-" gorm:"not null; type:boolean;default:true"`
+	CreatedAt    time.Time `json:"-" gorm:"autoCreateTime;not null" default:"now()"`
+	UpdatedAt    time.Time `json:"-" gorm:"autoUpdateTime;not null" default:"now()"`
 }
 
 func (ApiKey) TableName() string {
@@ -70,6 +72,7 @@ type ApiKeyResponse struct {
 	Provider         string    `json:"provider"`
 	KeyHint          string    `json:"key_hint"`
 	Scope            string    `json:"scope"`
+	ImportedFrom     *string   `json:"imported_from,omitempty"`
 	OpenAICompatible bool      `json:"openai_compatible"`
 	IsActive         bool      `json:"is_active"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -143,6 +146,7 @@ func (u *ApiKey) ToResponse() *ApiKeyResponse {
 		Provider:         u.Provider,
 		KeyHint:          u.KeyHint,
 		Scope:            u.Scope,
+		ImportedFrom:     u.ImportedFrom,
 		OpenAICompatible: IsOpenAICompatible(u.Provider),
 		IsActive:         u.IsActive,
 		CreatedAt:        u.CreatedAt,
