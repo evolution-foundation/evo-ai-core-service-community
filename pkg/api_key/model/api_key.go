@@ -142,7 +142,7 @@ func (u *ApiKey) ToResponse() *ApiKeyResponse {
 		Name:             u.Name,
 		Provider:         u.Provider,
 		KeyHint:          u.KeyHint,
-		Scope:            NormalizeScope(u.Scope),
+		Scope:            u.Scope,
 		OpenAICompatible: IsOpenAICompatible(u.Provider),
 		IsActive:         u.IsActive,
 		CreatedAt:        u.CreatedAt,
