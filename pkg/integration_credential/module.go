@@ -21,7 +21,9 @@ func New(db *gorm.DB, encryptionKey string) *Module {
 	// live in the processor and stay untouched.
 	oauthRepo := repository.NewOAuthConnectionRepository(db)
 	migrationState := service.NewMigrationState(repository.NewMigrationStateRepository(db))
-	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo), migrationState)
+	// AC10 of story 2.4: who uses each credential, aggregated per page.
+	references := service.NewReferenceIndex(repository.NewReferenceRepository(db))
+	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo), migrationState, references)
 
 	return &Module{
 		Handler: h,

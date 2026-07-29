@@ -37,11 +37,18 @@ type OAuthReconciler interface {
 	Decorate(ctx context.Context, rows []model.IntegrationCredential, now time.Time) ([]*model.IntegrationCredentialResponse, error)
 }
 
+// ReferenceReporter aggregates, for a whole page, which consumers point at each
+// vault credential (story 2.4 AC10).
+type ReferenceReporter interface {
+	Build(ctx context.Context) (service.ReferenceIndex, error)
+}
+
 type integrationCredentialHandler struct {
 	credentialService service.IntegrationCredentialService
 	encryptionKey     string
 	oauthSync         OAuthReconciler
 	migrationState    MigrationReporter
+	references        ReferenceReporter
 }
 
 // MigrationReporter answers, per consumer, whether the inline fallback can be
@@ -55,13 +62,38 @@ func NewIntegrationCredentialHandler(
 	encryptionKey string,
 	oauthSync OAuthReconciler,
 	migrationState MigrationReporter,
+	references ReferenceReporter,
 ) IntegrationCredentialHandler {
 	return &integrationCredentialHandler{
 		credentialService: credentialService,
 		encryptionKey:     encryptionKey,
 		oauthSync:         oauthSync,
 		migrationState:    migrationState,
+		references:        references,
 	}
+}
+
+// attachReferences fills `referenced_by` on every row of a page.
+//
+// A failure to aggregate does NOT fail the request: the credentials are the
+// point of the endpoint and the reference list is decoration. The field then
+// stays absent, and the screen falls back to not showing consumers.
+func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []model.IntegrationCredentialResponse) []model.IntegrationCredentialResponse {
+	if h.references == nil || len(items) == 0 {
+		return items
+	}
+
+	index, err := h.references.Build(c.Request.Context())
+	if err != nil {
+		log.Printf("integration credentials: reference aggregation failed: %v", err)
+		return items
+	}
+
+	for i := range items {
+		items[i].ReferencedBy = index.For(items[i].ID)
+	}
+
+	return items
 }
 
 // MigrationState reports which consumers may retire their inline secret field.
@@ -280,7 +312,9 @@ func (h *integrationCredentialHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.SuccessResponse(c, credential.ToResponse(), "Integration credential retrieved successfully", http.StatusOK)
+	single := h.attachReferences(c, []model.IntegrationCredentialResponse{*credential.ToResponse()})
+
+	response.SuccessResponse(c, single[0], "Integration credential retrieved successfully", http.StatusOK)
 }
 
 func (h *integrationCredentialHandler) List(c *gin.Context) {
@@ -330,6 +364,8 @@ func (h *integrationCredentialHandler) List(c *gin.Context) {
 		response.ErrorResponse(c, code, message, nil, httpCode)
 		return
 	}
+
+	items = h.attachReferences(c, items)
 
 	response.PaginatedResponse(c, items, list.Page, list.PageSize, int(list.TotalItems), "Integration credentials retrieved successfully", http.StatusOK)
 }

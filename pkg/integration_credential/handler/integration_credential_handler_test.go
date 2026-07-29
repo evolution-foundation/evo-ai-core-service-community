@@ -68,7 +68,7 @@ func newTestHandler(t *testing.T) (*stubService, IntegrationCredentialHandler) {
 	stub := &stubService{}
 	// nil reconciler: these tests cover the static path, where the oauth sync
 	// must stay out of the way entirely.
-	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil)
+	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil, nil)
 }
 
 func postJSON(t *testing.T, h func(*gin.Context), body string) *httptest.ResponseRecorder {
@@ -418,7 +418,7 @@ func (s *stubReporter) Retired(_ context.Context) (map[string]bool, error) {
 func TestMigrationStateReportsPerConsumer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reporter := &stubReporter{retired: map[string]bool{"custom_tools": true, "knowledge_nexus": false}}
-	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter)
+	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter, nil)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -452,7 +452,7 @@ func TestMigrationStateReportsPerConsumer(t *testing.T) {
 func TestMigrationStateFailureIsNeverRetired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reporter := &stubReporter{retired: map[string]bool{"custom_tools": false}, err: context.DeadlineExceeded}
-	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter)
+	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter, nil)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -488,5 +488,84 @@ func TestMigrationStateRouteIsRegisteredBeforeTheIdRoute(t *testing.T) {
 	}
 	if literal > parameterized {
 		t.Error(`"/migration-state" is registered after "/:id" and would be captured by it`)
+	}
+}
+
+// stubReferences answers the AC10 aggregation without a database.
+type stubReferences struct {
+	index service.ReferenceIndex
+	err   error
+	calls int
+}
+
+func (s *stubReferences) Build(_ context.Context) (service.ReferenceIndex, error) {
+	s.calls++
+	return s.index, s.err
+}
+
+func TestListAttachesReferencedBy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &stubService{}
+	id := uuid.New()
+	stub.listed = []model.IntegrationCredential{{ID: id, Name: "Dify", Provider: "dify", Kind: model.KindStatic, IsActive: true}}
+	references := &stubReferences{index: service.ReferenceIndex{id: {"Agente Dify", "Bot de canal (evo_ai)"}}}
+	handler := NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil, references)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/integration-credentials?page=1&pageSize=20", nil)
+
+	handler.List(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Agente Dify") || !strings.Contains(body, "Bot de canal") {
+		t.Errorf("referenced_by is missing from the payload: %s", body)
+	}
+	// The whole page is aggregated in ONE pass, never per credential.
+	if references.calls != 1 {
+		t.Errorf("the stores were read %d times for one page, want 1", references.calls)
+	}
+}
+
+// A credential nobody uses reports an empty ARRAY, not null: the screen tells
+// "no consumers" apart from "the server does not report this".
+func TestListReportsAnEmptyArrayForAnUnusedCredential(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &stubService{}
+	stub.listed = []model.IntegrationCredential{{ID: uuid.New(), Name: "Sem uso", Provider: "dify", Kind: model.KindStatic, IsActive: true}}
+	handler := NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil, &stubReferences{index: service.ReferenceIndex{}})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/integration-credentials?page=1&pageSize=20", nil)
+
+	handler.List(c)
+
+	if !strings.Contains(recorder.Body.String(), `"referenced_by":[]`) {
+		t.Errorf(`expected "referenced_by":[] in the payload: %s`, recorder.Body.String())
+	}
+}
+
+// The aggregation is decoration: if it fails, the credentials still list.
+func TestListStillRendersWhenTheAggregationFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &stubService{}
+	stub.listed = []model.IntegrationCredential{{ID: uuid.New(), Name: "Dify", Provider: "dify", Kind: model.KindStatic, IsActive: true}}
+	handler := NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil, &stubReferences{err: context.DeadlineExceeded})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/integration-credentials?page=1&pageSize=20", nil)
+
+	handler.List(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a failed aggregation took the listing down: %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "Dify") {
+		t.Errorf("the credential itself is missing: %s", recorder.Body.String())
 	}
 }

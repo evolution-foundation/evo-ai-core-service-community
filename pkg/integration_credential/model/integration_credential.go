@@ -171,6 +171,10 @@ type IntegrationCredentialResponse struct {
 	OwnerStore   *string   `json:"owner_store,omitempty"`
 	OwnerRef     *string   `json:"owner_ref,omitempty"`
 	ImportedFrom *string   `json:"imported_from,omitempty"`
+	// Consumers pointing at this credential, aggregated at listing time (story
+	// 2.4 AC10). Always a slice, never null: the screen distinguishes "no
+	// consumers" from "the server does not report this".
+	ReferencedBy []string `json:"referenced_by"`
 	// Mirrored from the owner store at listing time, for oauth rows only.
 	// NEVER persisted: a stored copy goes stale on the first token rotation.
 	ConnectionStatus    string    `json:"connection_status,omitempty"`
