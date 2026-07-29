@@ -61,7 +61,7 @@ func TestDeriveKeyHint(t *testing.T) {
 }
 
 func TestOpenAICompatibleByProvider(t *testing.T) {
-	compatible := []string{"openai", "azure", "custom"}
+	compatible := []string{"openai", "azure", "custom", "custom_openai_compatible"}
 	for _, provider := range compatible {
 		if !IsOpenAICompatible(provider) {
 			t.Errorf("provider %q should be OpenAI-compatible", provider)

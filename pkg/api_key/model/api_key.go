@@ -93,9 +93,10 @@ const keyHintLength = 4
 // openAICompatibleProviders speak the OpenAI wire protocol, so every AI feature
 // can use them. The remaining providers are only reachable through AI Agents.
 var openAICompatibleProviders = map[string]bool{
-	"openai": true,
-	"azure":  true,
-	"custom": true,
+	"openai":                   true,
+	"azure":                    true,
+	"custom":                   true,
+	"custom_openai_compatible": true,
 }
 
 // IsOpenAICompatible reports whether the provider serves every AI feature or
