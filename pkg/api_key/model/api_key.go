@@ -56,6 +56,10 @@ type ApiKeyUpdateRequest struct {
 	Scope    string `json:"scope"`
 	Key      string `json:"key"`       // Backend format
 	KeyValue string `json:"key_value"` // Frontend format
+	// Pointer so "absent" and "false" are distinguishable: GORM's struct
+	// Updates skips zero values, so a plain bool could never turn a credential
+	// OFF, which made the settings screen's deactivation toggle a silent no-op.
+	IsActive *bool `json:"is_active"`
 }
 
 // GetKey returns the key, prioritizing key_value (frontend) over key (backend)

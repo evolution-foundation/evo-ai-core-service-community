@@ -14,7 +14,7 @@ type ApiKeyService interface {
 	Create(ctx context.Context, request model.ApiKey) (*model.ApiKey, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ApiKey, error)
 	List(ctx context.Context, request model.ApiKeyListRequest) (*model.ApiKeyListResponse, error)
-	Update(ctx context.Context, request *model.ApiKey, id uuid.UUID) (*model.ApiKey, error)
+	Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
@@ -83,14 +83,14 @@ func (s *apiKeyService) List(ctx context.Context, request model.ApiKeyListReques
 	}, nil
 }
 
-func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, id uuid.UUID) (*model.ApiKey, error) {
+func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
 	_, err := s.GetByID(ctx, id)
 
 	if err != nil {
 		return nil, errors.New("API key not found")
 	}
 
-	apiKey, err := s.apiKeyRepository.Update(ctx, request, id)
+	apiKey, err := s.apiKeyRepository.Update(ctx, request, isActive, id)
 
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.APIKeyErrors)

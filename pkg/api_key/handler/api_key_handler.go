@@ -271,7 +271,7 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 		apiKey.KeyHint = model.DeriveKeyHint(actualKey)
 	}
 
-	updatedApiKey, err := h.apiKeyService.Update(c.Request.Context(), apiKey, id)
+	updatedApiKey, err := h.apiKeyService.Update(c.Request.Context(), apiKey, req.IsActive, id)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)

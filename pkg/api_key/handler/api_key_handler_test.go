@@ -23,10 +23,11 @@ const fernetTestKey = "cw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4="
 // hands down so tests can assert on the persisted key and hint.
 type stubService struct {
 	service.ApiKeyService
-	created     model.ApiKey
-	updated     *model.ApiKey
-	listed      []model.ApiKey
-	listRequest model.ApiKeyListRequest
+	created         model.ApiKey
+	updated         *model.ApiKey
+	updatedIsActive *bool
+	listed          []model.ApiKey
+	listRequest     model.ApiKeyListRequest
 }
 
 func (s *stubService) Create(_ context.Context, request model.ApiKey) (*model.ApiKey, error) {
@@ -35,8 +36,9 @@ func (s *stubService) Create(_ context.Context, request model.ApiKey) (*model.Ap
 	return &request, nil
 }
 
-func (s *stubService) Update(_ context.Context, request *model.ApiKey, id uuid.UUID) (*model.ApiKey, error) {
+func (s *stubService) Update(_ context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
 	s.updated = request
+	s.updatedIsActive = isActive
 	stored := *request
 	stored.ID = id
 	return &stored, nil

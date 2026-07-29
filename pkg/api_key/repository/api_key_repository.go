@@ -14,7 +14,7 @@ type ApiKeyRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ApiKey, error)
 	List(ctx context.Context, request model.ApiKeyListRequest) ([]*model.ApiKey, error)
 	Count(ctx context.Context, active string, scope string) (int64, error)
-	Update(ctx context.Context, apiKey *model.ApiKey, id uuid.UUID) (*model.ApiKey, error)
+	Update(ctx context.Context, apiKey *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
@@ -94,13 +94,30 @@ func (r *apiKeyRepository) Count(ctx context.Context, active string, scope strin
 	return count, nil
 }
 
-func (r *apiKeyRepository) Update(ctx context.Context, apiKey *model.ApiKey, id uuid.UUID) (*model.ApiKey, error) {
+func (r *apiKeyRepository) Update(ctx context.Context, apiKey *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
 	apiKey.UpdatedAt = time.Now()
-	if err := r.db.WithContext(ctx).Where("id = ?", id).Updates(apiKey).First(&apiKey).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id = ?", id).Updates(apiKey).Error; err != nil {
 		return nil, err
 	}
 
-	return apiKey, nil
+	// GORM's struct Updates skips zero values, so `false` could never travel
+	// through the struct: an explicit column update is what makes deactivation
+	// possible at all.
+	if isActive != nil {
+		if err := r.db.WithContext(ctx).
+			Model(&model.ApiKey{}).
+			Where("id = ?", id).
+			Update("is_active", *isActive).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	var updated model.ApiKey
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&updated).Error; err != nil {
+		return nil, err
+	}
+
+	return &updated, nil
 }
 
 func (r *apiKeyRepository) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
