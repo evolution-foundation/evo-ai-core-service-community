@@ -7,6 +7,7 @@ import (
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/custom_mcp_server/model"
 	"evo-ai-core-service/pkg/custom_mcp_server/service"
+	"evo-ai-core-service/pkg/evoextensions/secretmerge"
 	"net/http"
 	"regexp"
 	"sort"
@@ -98,13 +99,14 @@ func (h *customMcpServerHandler) Create(c *gin.Context) {
 	}
 
 	customMcpServer := model.CustomMcpServer{
-		Name:        req.Name,
-		Description: req.Description,
-		URL:         req.URL,
-		Headers:     stringutils.StringMapToJSON(req.Headers),
-		Timeout:     req.Timeout,
-		RetryCount:  req.RetryCount,
-		Tags:        req.Tags,
+		Name:           req.Name,
+		Description:    req.Description,
+		URL:            req.URL,
+		Headers:        stringutils.StringMapToJSON(req.Headers),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		Timeout:        req.Timeout,
+		RetryCount:     req.RetryCount,
+		Tags:           req.Tags,
 	}
 
 	createdCustomMcpServer, err := h.customMcpServerService.Create(c.Request.Context(), customMcpServer)
@@ -259,14 +261,22 @@ func (h *customMcpServerHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Same reason as the tool update: the response stopped returning header
+	// values, so a save that omits them must not erase the stored secret.
+	mergedHeaders := req.Headers
+	if stored, err := h.customMcpServerService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+		mergedHeaders = secretmerge.KeepMissing(req.Headers, stringutils.JSONToStringMap(stored.Headers))
+	}
+
 	customMcpServer := &model.CustomMcpServer{
-		Name:        req.Name,
-		Description: req.Description,
-		URL:         req.URL,
-		Headers:     stringutils.StringMapToJSON(req.Headers),
-		Timeout:     req.Timeout,
-		RetryCount:  req.RetryCount,
-		Tags:        req.Tags,
+		Name:           req.Name,
+		Description:    req.Description,
+		URL:            req.URL,
+		Headers:        stringutils.StringMapToJSON(mergedHeaders),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		Timeout:        req.Timeout,
+		RetryCount:     req.RetryCount,
+		Tags:           req.Tags,
 	}
 
 	updatedCustomMcpServer, err := h.customMcpServerService.Update(c.Request.Context(), customMcpServer, id)

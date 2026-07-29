@@ -177,9 +177,13 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 	tools, err := httpclient.DoPostJSON[model.CustomMcpServerToolsResponse](
 		ctx,
 		fmt.Sprintf("%s/api/%s/custom-mcp-servers/discover-tools", s.cfgAIProcessorService.URL, s.cfgAIProcessorService.Version),
+		// The vault references travel instead of the resolved values: the
+		// processor reads the secret itself, so a plaintext credential no
+		// longer crosses the service boundary in a JSON body (EVO-2250 2.4).
 		map[string]interface{}{
-			"url":     request.URL,
-			"headers": stringutils.JSONToStringMap(request.Headers),
+			"url":             request.URL,
+			"headers":         stringutils.JSONToStringMap(request.Headers),
+			"credential_refs": stringutils.JSONToStringMap(request.CredentialRefs),
 		},
 		headers,
 		http.StatusOK,

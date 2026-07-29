@@ -75,10 +75,24 @@ func (r *oauthConnectionRepository) ListOAuthRows(ctx context.Context) ([]model.
 
 // UpsertOAuthRow writes the reference by its natural key. A returning
 // connection reactivates its existing row instead of creating a second one.
+//
+// Two details proven against a real Postgres (adversarial review, 2026-07-29):
+//
+//   - `Omit("Value")` keeps the value column out of the INSERT. The struct
+//     field is a plain string, and GORM would otherwise send value = '', which
+//     violates the kind-content CHECK (an oauth row requires value IS NULL).
+//   - `TargetWhere` repeats the predicate of the PARTIAL unique index from
+//     migration 000020. Without it Postgres rejects the statement outright with
+//     "no unique or exclusion constraint matching the ON CONFLICT
+//     specification", so the sync would fail on every listing.
 func (r *oauthConnectionRepository) UpsertOAuthRow(ctx context.Context, row model.IntegrationCredential) error {
 	return r.db.WithContext(ctx).
+		Omit("Value").
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "owner_store"}, {Name: "owner_ref"}},
+			Columns: []clause.Column{{Name: "owner_store"}, {Name: "owner_ref"}},
+			TargetWhere: clause.Where{Exprs: []clause.Expression{
+				clause.Expr{SQL: "owner_store IS NOT NULL AND owner_ref IS NOT NULL"},
+			}},
 			DoUpdates: clause.AssignmentColumns([]string{"name", "provider", "is_active", "updated_at"}),
 		}).
 		Create(&row).Error

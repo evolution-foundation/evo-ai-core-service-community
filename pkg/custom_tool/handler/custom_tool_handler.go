@@ -7,6 +7,7 @@ import (
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/custom_tool/model"
 	"evo-ai-core-service/pkg/custom_tool/service"
+	"evo-ai-core-service/pkg/evoextensions/secretmerge"
 	"net/http"
 	"regexp"
 	"sort"
@@ -100,20 +101,21 @@ func (h *customToolHandler) Create(c *gin.Context) {
 	}
 
 	customTools := model.CustomTool{
-		Name:          req.Name,
-		Description:   req.Description,
-		Method:        req.Method,
-		Endpoint:      req.Endpoint,
-		Headers:       stringutils.StringMapToJSON(req.Headers),
-		PathParams:    stringutils.StringMapToJSON(req.PathParams),
-		QueryParams:   stringutils.InterfaceMapToJSON(req.QueryParams),
-		BodyParams:    stringutils.InterfaceMapToJSON(req.BodyParams),
-		ErrorHandling: stringutils.InterfaceMapToJSON(req.ErrorHandling),
-		Values:        stringutils.InterfaceMapToJSON(req.Values),
-		Tags:          req.Tags,
-		Examples:      req.Examples,
-		InputModes:    req.InputModes,
-		OutputModes:   req.OutputModes,
+		Name:           req.Name,
+		Description:    req.Description,
+		Method:         req.Method,
+		Endpoint:       req.Endpoint,
+		Headers:        stringutils.StringMapToJSON(req.Headers),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		PathParams:     stringutils.StringMapToJSON(req.PathParams),
+		QueryParams:    stringutils.InterfaceMapToJSON(req.QueryParams),
+		BodyParams:     stringutils.InterfaceMapToJSON(req.BodyParams),
+		ErrorHandling:  stringutils.InterfaceMapToJSON(req.ErrorHandling),
+		Values:         stringutils.InterfaceMapToJSON(req.Values),
+		Tags:           req.Tags,
+		Examples:       req.Examples,
+		InputModes:     req.InputModes,
+		OutputModes:    req.OutputModes,
 	}
 
 	createdCustomTools, err := h.customToolService.Create(c.Request.Context(), customTools)
@@ -267,21 +269,31 @@ func (h *customToolHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// The response no longer returns header VALUES, so a screen saving the
+	// object it received sends them back empty or absent. Without this merge the
+	// wholesale update would erase the stored secret (same defect story 2.3 fixed
+	// on agent integrations).
+	mergedHeaders := req.Headers
+	if stored, err := h.customToolService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+		mergedHeaders = secretmerge.KeepMissing(req.Headers, stringutils.JSONToStringMap(stored.Headers))
+	}
+
 	customTools := &model.CustomTool{
-		Name:          req.Name,
-		Description:   req.Description,
-		Method:        req.Method,
-		Endpoint:      req.Endpoint,
-		Headers:       stringutils.StringMapToJSON(req.Headers),
-		PathParams:    stringutils.StringMapToJSON(req.PathParams),
-		QueryParams:   stringutils.InterfaceMapToJSON(req.QueryParams),
-		BodyParams:    stringutils.InterfaceMapToJSON(req.BodyParams),
-		ErrorHandling: stringutils.InterfaceMapToJSON(req.ErrorHandling),
-		Values:        stringutils.InterfaceMapToJSON(req.Values),
-		Tags:          req.Tags,
-		Examples:      req.Examples,
-		InputModes:    req.InputModes,
-		OutputModes:   req.OutputModes,
+		Name:           req.Name,
+		Description:    req.Description,
+		Method:         req.Method,
+		Endpoint:       req.Endpoint,
+		Headers:        stringutils.StringMapToJSON(mergedHeaders),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		PathParams:     stringutils.StringMapToJSON(req.PathParams),
+		QueryParams:    stringutils.InterfaceMapToJSON(req.QueryParams),
+		BodyParams:     stringutils.InterfaceMapToJSON(req.BodyParams),
+		ErrorHandling:  stringutils.InterfaceMapToJSON(req.ErrorHandling),
+		Values:         stringutils.InterfaceMapToJSON(req.Values),
+		Tags:           req.Tags,
+		Examples:       req.Examples,
+		InputModes:     req.InputModes,
+		OutputModes:    req.OutputModes,
 	}
 
 	updatedCustomTools, err := h.customToolService.Update(c.Request.Context(), customTools, id)

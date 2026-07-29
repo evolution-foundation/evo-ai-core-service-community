@@ -34,10 +34,10 @@ import (
 //  5. Response headers passed back only via an allowlist (no Set-Cookie,
 //     Authorization echo, etc.).
 const (
-	responseBodyLimit       int64 = 1 << 20 // 1 MiB
-	clientTimeout                 = 15 * time.Second
-	responseHeaderTimeout         = 10 * time.Second
-	dialTimeout                   = 5 * time.Second
+	responseBodyLimit     int64 = 1 << 20 // 1 MiB
+	clientTimeout               = 15 * time.Second
+	responseHeaderTimeout       = 10 * time.Second
+	dialTimeout                 = 5 * time.Second
 )
 
 // responseHeaderAllowlist is the set of response headers safe to surface
