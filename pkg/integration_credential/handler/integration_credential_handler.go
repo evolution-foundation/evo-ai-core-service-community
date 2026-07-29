@@ -25,6 +25,7 @@ type IntegrationCredentialHandler interface {
 	Create(c *gin.Context)
 	GetByID(c *gin.Context)
 	List(c *gin.Context)
+	MigrationState(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
 }
@@ -40,14 +41,46 @@ type integrationCredentialHandler struct {
 	credentialService service.IntegrationCredentialService
 	encryptionKey     string
 	oauthSync         OAuthReconciler
+	migrationState    MigrationReporter
 }
 
-func NewIntegrationCredentialHandler(credentialService service.IntegrationCredentialService, encryptionKey string, oauthSync OAuthReconciler) IntegrationCredentialHandler {
+// MigrationReporter answers, per consumer, whether the inline fallback can be
+// retired (story 2.7).
+type MigrationReporter interface {
+	Retired(ctx context.Context) (map[string]bool, error)
+}
+
+func NewIntegrationCredentialHandler(
+	credentialService service.IntegrationCredentialService,
+	encryptionKey string,
+	oauthSync OAuthReconciler,
+	migrationState MigrationReporter,
+) IntegrationCredentialHandler {
 	return &integrationCredentialHandler{
 		credentialService: credentialService,
 		encryptionKey:     encryptionKey,
 		oauthSync:         oauthSync,
+		migrationState:    migrationState,
 	}
+}
+
+// MigrationState reports which consumers may retire their inline secret field.
+//
+// A read failure answers "nothing retired" with a 200 rather than an error: the
+// screens treat a missing answer as not retired, so the inline field stays
+// editable. Failing the request would leave the form unable to decide at all.
+func (h *integrationCredentialHandler) MigrationState(c *gin.Context) {
+	if h.migrationState == nil {
+		response.SuccessResponse(c, gin.H{"retired": map[string]bool{}}, "Migration state retrieved successfully", http.StatusOK)
+		return
+	}
+
+	retired, err := h.migrationState.Retired(c.Request.Context())
+	if err != nil {
+		log.Printf("integration credentials: migration state read failed: %v", err)
+	}
+
+	response.SuccessResponse(c, gin.H{"retired": retired}, "Migration state retrieved successfully", http.StatusOK)
 }
 
 // decorateOAuthRows fills the mirrored connection state on oauth rows. Static
@@ -115,6 +148,12 @@ func (h *integrationCredentialHandler) RegisterRoutesMiddleware(router gin.IRout
 		credentials.GET("/",
 			permissionMiddleware.RequirePermission("ai_integration_credentials", "read"),
 			h.List)
+		// Registered BEFORE /:id so the literal path is not captured by the
+		// parameterized one.
+		credentials.GET("/migration-state",
+			permissionMiddleware.RequirePermission("ai_integration_credentials", "read"),
+			h.MigrationState)
+
 		credentials.GET("/:id",
 			permissionMiddleware.RequirePermission("ai_integration_credentials", "read"),
 			h.GetByID)

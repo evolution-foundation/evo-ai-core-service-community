@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func newTestHandler(t *testing.T) (*stubService, IntegrationCredentialHandler) {
 	stub := &stubService{}
 	// nil reconciler: these tests cover the static path, where the oauth sync
 	// must stay out of the way entirely.
-	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey, nil)
+	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil)
 }
 
 func postJSON(t *testing.T, h func(*gin.Context), body string) *httptest.ResponseRecorder {
@@ -401,5 +402,91 @@ func TestListNeverCarriesValues(t *testing.T) {
 	}
 	if stub.listRequest.Scope != model.ScopeAccount {
 		t.Errorf("scope filter = %q, want account", stub.listRequest.Scope)
+	}
+}
+
+// stubReporter answers the migration-state contract without a database.
+type stubReporter struct {
+	retired map[string]bool
+	err     error
+}
+
+func (s *stubReporter) Retired(_ context.Context) (map[string]bool, error) {
+	return s.retired, s.err
+}
+
+func TestMigrationStateReportsPerConsumer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reporter := &stubReporter{retired: map[string]bool{"custom_tools": true, "knowledge_nexus": false}}
+	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/integration-credentials/migration-state", nil)
+
+	handler.MigrationState(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var envelope struct {
+		Data struct {
+			Retired map[string]bool `json:"retired"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !envelope.Data.Retired["custom_tools"] {
+		t.Error("custom_tools should be reported as retired")
+	}
+	if envelope.Data.Retired["knowledge_nexus"] {
+		t.Error("knowledge_nexus should not be reported as retired")
+	}
+}
+
+// Negative proof: a failed read must answer "nothing retired" rather than an
+// error. The screens read a missing answer as not retired and keep the inline
+// field editable; failing the request would leave the form unable to decide.
+func TestMigrationStateFailureIsNeverRetired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reporter := &stubReporter{retired: map[string]bool{"custom_tools": false}, err: context.DeadlineExceeded}
+	handler := NewIntegrationCredentialHandler(&stubService{}, fernetTestKey, nil, reporter)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/integration-credentials/migration-state", nil)
+
+	handler.MigrationState(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 even on a read failure", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), `"custom_tools":true`) {
+		t.Errorf("a failed read reported a consumer as retired: %s", recorder.Body.String())
+	}
+}
+
+// The literal route must be registered BEFORE /:id, or gin captures it as an id
+// and the endpoint answers "credential not found" instead of the state.
+//
+// Registration goes through the global permission middleware, which a unit test
+// has no business booting, so the ordering is asserted on the source itself.
+func TestMigrationStateRouteIsRegisteredBeforeTheIdRoute(t *testing.T) {
+	source, err := os.ReadFile("integration_credential_handler.go")
+	if err != nil {
+		t.Fatalf("read handler source: %v", err)
+	}
+
+	body := string(source)
+	literal := strings.Index(body, `credentials.GET("/migration-state"`)
+	parameterized := strings.Index(body, `credentials.GET("/:id"`)
+
+	if literal == -1 || parameterized == -1 {
+		t.Fatal("expected both routes to be registered")
+	}
+	if literal > parameterized {
+		t.Error(`"/migration-state" is registered after "/:id" and would be captured by it`)
 	}
 }

@@ -20,7 +20,8 @@ func New(db *gorm.DB, encryptionKey string) *Module {
 	// The oauth sync reconciles reference rows on listing: the OAuth callbacks
 	// live in the processor and stay untouched.
 	oauthRepo := repository.NewOAuthConnectionRepository(db)
-	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo))
+	migrationState := service.NewMigrationState(repository.NewMigrationStateRepository(db))
+	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo), migrationState)
 
 	return &Module{
 		Handler: h,
