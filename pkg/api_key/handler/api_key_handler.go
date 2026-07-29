@@ -142,6 +142,7 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 		Name:     req.Name,
 		Provider: req.Provider,
 		Key:      encryptedKey,
+		KeyHint:  model.DeriveKeyHint(actualKey),
 	}
 
 	createdApiKey, err := h.apiKeyService.Create(c.Request.Context(), apiKey)
@@ -243,25 +244,23 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Validate that at least one key was provided
-	actualKey := req.GetKey()
-	if actualKey == "" {
-		code, message, httpCode := errors.HandleError(fmt.Errorf("key or key_value is required"))
-		response.ErrorResponse(c, code, message, nil, httpCode)
-		return
-	}
-
-	encryptedKey, err := h.encryptKey(actualKey)
-	if err != nil {
-		code, message, httpCode := errors.HandleError(err)
-		response.ErrorResponse(c, code, message, nil, httpCode)
-		return
-	}
-
 	apiKey := &model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
-		Key:      encryptedKey,
+	}
+
+	// An empty key means "keep the stored one": GORM's Updates skips zero-valued
+	// struct fields, so Key and KeyHint stay untouched.
+	if actualKey := req.GetKey(); actualKey != "" {
+		encryptedKey, err := h.encryptKey(actualKey)
+		if err != nil {
+			code, message, httpCode := errors.HandleError(err)
+			response.ErrorResponse(c, code, message, nil, httpCode)
+			return
+		}
+
+		apiKey.Key = encryptedKey
+		apiKey.KeyHint = model.DeriveKeyHint(actualKey)
 	}
 
 	updatedApiKey, err := h.apiKeyService.Update(c.Request.Context(), apiKey, id)

@@ -15,6 +15,7 @@ type ApiKey struct {
 	Name      string    `json:"-" gorm:"not null; type:varchar(255)"`
 	Provider  string    `json:"-" gorm:"not null; type:varchar(255)"`
 	Key       string    `json:"-" gorm:"not null; type:text"`
+	KeyHint   string    `json:"-" gorm:"not null; type:varchar(8);default:''"`
 	IsActive  bool      `json:"-" gorm:"not null; type:boolean;default:true"`
 	CreatedAt time.Time `json:"-" gorm:"autoCreateTime;not null" default:"now()"`
 	UpdatedAt time.Time `json:"-" gorm:"autoUpdateTime;not null" default:"now()"`
@@ -61,13 +62,14 @@ func (r *ApiKeyUpdateRequest) GetKey() string {
 }
 
 type ApiKeyResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Provider  string    `json:"provider"`
-	Key       string    `json:"key"`
-	IsActive  bool      `json:"is_active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID               uuid.UUID `json:"id"`
+	Name             string    `json:"name"`
+	Provider         string    `json:"provider"`
+	KeyHint          string    `json:"key_hint"`
+	OpenAICompatible bool      `json:"openai_compatible"`
+	IsActive         bool      `json:"is_active"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type ApiKeyListResponse struct {
@@ -86,14 +88,41 @@ type ApiKeyListRequest struct {
 	Active   string `json:"-" binding:"required"`
 }
 
+const keyHintLength = 4
+
+// openAICompatibleProviders speak the OpenAI wire protocol, so every AI feature
+// can use them. The remaining providers are only reachable through AI Agents.
+var openAICompatibleProviders = map[string]bool{
+	"openai": true,
+	"azure":  true,
+	"custom": true,
+}
+
+// IsOpenAICompatible reports whether the provider serves every AI feature or
+// only AI Agents.
+func IsOpenAICompatible(provider string) bool {
+	return openAICompatibleProviders[provider]
+}
+
+// DeriveKeyHint returns the last characters of a plaintext key, used to render
+// a mask in the UI without ever sending the key back to the browser.
+func DeriveKeyHint(plainKey string) string {
+	runes := []rune(plainKey)
+	if len(runes) <= keyHintLength {
+		return string(runes)
+	}
+	return string(runes[len(runes)-keyHintLength:])
+}
+
 func (u *ApiKey) ToResponse() *ApiKeyResponse {
 	return &ApiKeyResponse{
-		ID:        u.ID,
-		Name:      u.Name,
-		Provider:  u.Provider,
-		Key:       u.Key,
-		IsActive:  u.IsActive,
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
+		ID:               u.ID,
+		Name:             u.Name,
+		Provider:         u.Provider,
+		KeyHint:          u.KeyHint,
+		OpenAICompatible: IsOpenAICompatible(u.Provider),
+		IsActive:         u.IsActive,
+		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        u.UpdatedAt,
 	}
 }
