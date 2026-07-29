@@ -141,6 +141,7 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 	apiKey := model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
+		Scope:    model.NormalizeScope(req.Scope),
 		Key:      encryptedKey,
 		KeyHint:  model.DeriveKeyHint(actualKey),
 	}
@@ -216,6 +217,7 @@ func (h *apiKeyHandler) List(c *gin.Context) {
 	req.Page = page
 	req.PageSize = pageSize
 	req.Active = active
+	req.Scope = c.DefaultQuery("scope", "")
 
 	listApiKeys, err := h.apiKeyService.List(c.Request.Context(), req)
 
@@ -247,6 +249,12 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 	apiKey := &model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
+	}
+
+	// An omitted scope keeps the stored one (GORM skips zero-valued fields);
+	// a provided one is normalized so no request can write an invalid scope.
+	if req.Scope != "" {
+		apiKey.Scope = model.NormalizeScope(req.Scope)
 	}
 
 	// An empty key means "keep the stored one": GORM's Updates skips zero-valued

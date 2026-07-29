@@ -23,9 +23,10 @@ const fernetTestKey = "cw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4="
 // hands down so tests can assert on the persisted key and hint.
 type stubService struct {
 	service.ApiKeyService
-	created model.ApiKey
-	updated *model.ApiKey
-	listed  []model.ApiKey
+	created     model.ApiKey
+	updated     *model.ApiKey
+	listed      []model.ApiKey
+	listRequest model.ApiKeyListRequest
 }
 
 func (s *stubService) Create(_ context.Context, request model.ApiKey) (*model.ApiKey, error) {
@@ -42,6 +43,7 @@ func (s *stubService) Update(_ context.Context, request *model.ApiKey, id uuid.U
 }
 
 func (s *stubService) List(_ context.Context, request model.ApiKeyListRequest) (*model.ApiKeyListResponse, error) {
+	s.listRequest = request
 	items := make([]model.ApiKeyResponse, len(s.listed))
 	for i, apiKey := range s.listed {
 		items[i] = *apiKey.ToResponse()
@@ -179,6 +181,92 @@ func TestListNeverReturnsAnyKey(t *testing.T) {
 	if !strings.Contains(body, `"openai_compatible":true`) ||
 		!strings.Contains(body, `"openai_compatible":false`) {
 		t.Errorf("list is missing openai_compatible per provider: %s", body)
+	}
+}
+
+// EVO-2250 story 1.2: credentials carry the scope they belong to. The
+// resolution chain itself lives in the CRM — this service only stores it.
+func TestCreateStoresRequestedScope(t *testing.T) {
+	svc := &stubService{}
+
+	call(t, http.MethodPost, "/agents/apikeys",
+		`{"name":"Chave da casa","provider":"openai","key_value":"sk-house-0001","scope":"installation"}`,
+		func(h ApiKeyHandler, c *gin.Context) { h.Create(c) }, svc)
+
+	if svc.created.Scope != model.ScopeInstallation {
+		t.Errorf("scope = %q, want %q", svc.created.Scope, model.ScopeInstallation)
+	}
+}
+
+func TestCreateDefaultsToAccountScope(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"A","provider":"openai","key_value":"sk-0001"}`,
+		`{"name":"B","provider":"openai","key_value":"sk-0002","scope":""}`,
+		`{"name":"C","provider":"openai","key_value":"sk-0003","scope":"nonsense"}`,
+	} {
+		svc := &stubService{}
+		call(t, http.MethodPost, "/agents/apikeys", body,
+			func(h ApiKeyHandler, c *gin.Context) { h.Create(c) }, svc)
+
+		// An unknown scope must never widen a credential to the installation.
+		if svc.created.Scope != model.ScopeAccount {
+			t.Errorf("body %s → scope %q, want %q", body, svc.created.Scope, model.ScopeAccount)
+		}
+	}
+}
+
+func TestUpdateWithoutScopeKeepsStoredScope(t *testing.T) {
+	svc := &stubService{}
+
+	call(t, http.MethodPut, "/agents/apikeys/"+uuid.NewString(),
+		`{"name":"Producao","provider":"openai"}`,
+		func(h ApiKeyHandler, c *gin.Context) {
+			c.Params = gin.Params{{Key: "id", Value: uuid.NewString()}}
+			h.Update(c)
+		}, svc)
+
+	// Zero value makes GORM skip the column, preserving the stored scope.
+	if svc.updated.Scope != "" {
+		t.Errorf("scope = %q, want empty so the stored scope survives", svc.updated.Scope)
+	}
+}
+
+func TestListForwardsScopeFilter(t *testing.T) {
+	svc := &stubService{}
+
+	call(t, http.MethodGet, "/agents/apikeys?scope=installation", "",
+		func(h ApiKeyHandler, c *gin.Context) { h.List(c) }, svc)
+
+	if svc.listRequest.Scope != model.ScopeInstallation {
+		t.Errorf("list scope = %q, want %q", svc.listRequest.Scope, model.ScopeInstallation)
+	}
+}
+
+func TestListWithoutScopeReturnsEveryScope(t *testing.T) {
+	svc := &stubService{}
+
+	call(t, http.MethodGet, "/agents/apikeys", "",
+		func(h ApiKeyHandler, c *gin.Context) { h.List(c) }, svc)
+
+	// The settings screen renders both sections from a single call.
+	if svc.listRequest.Scope != "" {
+		t.Errorf("list scope = %q, want empty (no filter)", svc.listRequest.Scope)
+	}
+}
+
+func TestListResponseCarriesScope(t *testing.T) {
+	svc := &stubService{listed: []model.ApiKey{
+		{Name: "Chave da casa", Provider: "openai", Scope: model.ScopeInstallation, IsActive: true},
+		{Name: "Producao", Provider: "openai", Scope: model.ScopeAccount, IsActive: true},
+	}}
+
+	rec := call(t, http.MethodGet, "/agents/apikeys", "",
+		func(h ApiKeyHandler, c *gin.Context) { h.List(c) }, svc)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"scope":"installation"`) ||
+		!strings.Contains(body, `"scope":"account"`) {
+		t.Errorf("list is missing the scope per credential: %s", body)
 	}
 }
 

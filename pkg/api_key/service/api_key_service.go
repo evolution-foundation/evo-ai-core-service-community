@@ -56,7 +56,7 @@ func (s *apiKeyService) List(ctx context.Context, request model.ApiKeyListReques
 	}
 
 	// Get total count
-	totalItems, err := s.apiKeyRepository.Count(ctx, request.Active)
+	totalItems, err := s.apiKeyRepository.Count(ctx, request.Active, request.Scope)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.APIKeyErrors)
 	}

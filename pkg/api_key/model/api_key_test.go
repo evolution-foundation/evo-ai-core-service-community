@@ -78,6 +78,36 @@ func TestOpenAICompatibleByProvider(t *testing.T) {
 	}
 }
 
+func TestScopeIsCarriedToResponse(t *testing.T) {
+	installation := ApiKey{Provider: "openai", Scope: ScopeInstallation}
+	if got := installation.ToResponse().Scope; got != ScopeInstallation {
+		t.Errorf("scope = %q, want %q", got, ScopeInstallation)
+	}
+
+	account := ApiKey{Provider: "openai", Scope: ScopeAccount}
+	if got := account.ToResponse().Scope; got != ScopeAccount {
+		t.Errorf("scope = %q, want %q", got, ScopeAccount)
+	}
+}
+
+func TestNormalizeScopeDefaultsToAccount(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ScopeAccount},
+		{"account", ScopeAccount},
+		{"installation", ScopeInstallation},
+		{"nonsense", ScopeAccount},
+	}
+
+	for _, tc := range cases {
+		if got := NormalizeScope(tc.in); got != tc.want {
+			t.Errorf("NormalizeScope(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestToResponseCarriesOpenAICompatible(t *testing.T) {
 	openAIKey := ApiKey{Provider: "openai"}
 	if !openAIKey.ToResponse().OpenAICompatible {

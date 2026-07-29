@@ -16,6 +16,7 @@ type ApiKey struct {
 	Provider  string    `json:"-" gorm:"not null; type:varchar(255)"`
 	Key       string    `json:"-" gorm:"not null; type:text"`
 	KeyHint   string    `json:"-" gorm:"not null; type:varchar(8);default:''"`
+	Scope     string    `json:"-" gorm:"not null; type:varchar(32);default:'account'"`
 	IsActive  bool      `json:"-" gorm:"not null; type:boolean;default:true"`
 	CreatedAt time.Time `json:"-" gorm:"autoCreateTime;not null" default:"now()"`
 	UpdatedAt time.Time `json:"-" gorm:"autoUpdateTime;not null" default:"now()"`
@@ -34,6 +35,7 @@ type ApiKeyBase struct {
 type ApiKeyRequest struct {
 	Name     string `json:"name" binding:"required"`
 	Provider string `json:"provider" binding:"required"`
+	Scope    string `json:"scope"`
 	Key      string `json:"key"`       // Backend format
 	KeyValue string `json:"key_value"` // Frontend format
 }
@@ -49,6 +51,7 @@ func (r *ApiKeyRequest) GetKey() string {
 type ApiKeyUpdateRequest struct {
 	Name     string `json:"name" binding:"required"`
 	Provider string `json:"provider" binding:"required"`
+	Scope    string `json:"scope"`
 	Key      string `json:"key"`       // Backend format
 	KeyValue string `json:"key_value"` // Frontend format
 }
@@ -66,6 +69,7 @@ type ApiKeyResponse struct {
 	Name             string    `json:"name"`
 	Provider         string    `json:"provider"`
 	KeyHint          string    `json:"key_hint"`
+	Scope            string    `json:"scope"`
 	OpenAICompatible bool      `json:"openai_compatible"`
 	IsActive         bool      `json:"is_active"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -86,9 +90,26 @@ type ApiKeyListRequest struct {
 	Page     int    `json:"-" binding:"required"`
 	PageSize int    `json:"-" binding:"required"`
 	Active   string `json:"-" binding:"required"`
+	Scope    string `json:"-"`
 }
 
 const keyHintLength = 4
+
+// Credential scopes. The resolution chain lives in the CRM (Ai::CredentialResolver);
+// this service only stores and filters by the scope a credential belongs to.
+const (
+	ScopeInstallation = "installation"
+	ScopeAccount      = "account"
+)
+
+// NormalizeScope keeps unknown or missing values on the narrowest scope, so a
+// malformed request can never widen a credential to the whole installation.
+func NormalizeScope(scope string) string {
+	if scope == ScopeInstallation {
+		return ScopeInstallation
+	}
+	return ScopeAccount
+}
 
 // openAICompatibleProviders speak the OpenAI wire protocol, so every AI feature
 // can use them. The remaining providers are only reachable through AI Agents.
@@ -121,6 +142,7 @@ func (u *ApiKey) ToResponse() *ApiKeyResponse {
 		Name:             u.Name,
 		Provider:         u.Provider,
 		KeyHint:          u.KeyHint,
+		Scope:            NormalizeScope(u.Scope),
 		OpenAICompatible: IsOpenAICompatible(u.Provider),
 		IsActive:         u.IsActive,
 		CreatedAt:        u.CreatedAt,

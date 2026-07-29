@@ -13,7 +13,7 @@ type ApiKeyRepository interface {
 	Create(ctx context.Context, apiKey model.ApiKey) (*model.ApiKey, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ApiKey, error)
 	List(ctx context.Context, request model.ApiKeyListRequest) ([]*model.ApiKey, error)
-	Count(ctx context.Context, active string) (int64, error)
+	Count(ctx context.Context, active string, scope string) (int64, error)
 	Update(ctx context.Context, apiKey *model.ApiKey, id uuid.UUID) (*model.ApiKey, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
@@ -57,6 +57,12 @@ func (r *apiKeyRepository) List(ctx context.Context, request model.ApiKeyListReq
 		query = query.Where("is_active = ?", true)
 	}
 
+	// An empty scope lists every scope, so the settings screen renders both
+	// sections in one call.
+	if request.Scope != "" {
+		query = query.Where("scope = ?", request.Scope)
+	}
+
 	if err := query.Offset((request.Page - 1) * request.PageSize).Limit(request.PageSize).Find(&apiKeys).Error; err != nil {
 		return []*model.ApiKey{}, err
 	}
@@ -64,7 +70,7 @@ func (r *apiKeyRepository) List(ctx context.Context, request model.ApiKeyListReq
 	return apiKeys, nil
 }
 
-func (r *apiKeyRepository) Count(ctx context.Context, active string) (int64, error) {
+func (r *apiKeyRepository) Count(ctx context.Context, active string, scope string) (int64, error) {
 	var count int64
 
 	query := r.db.WithContext(ctx).Model(&model.ApiKey{})
@@ -75,6 +81,10 @@ func (r *apiKeyRepository) Count(ctx context.Context, active string) (int64, err
 	} else {
 		// Default: count only active API keys
 		query = query.Where("is_active = ?", true)
+	}
+
+	if scope != "" {
+		query = query.Where("scope = ?", scope)
 	}
 
 	if err := query.Count(&count).Error; err != nil {
