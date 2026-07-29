@@ -37,8 +37,16 @@ func (s *stubRepository) GetByAgentAndProvider(_ context.Context, _ uuid.UUID, _
 // stubCredentialLookup answers whether a vault reference is usable, without
 // reaching the credentials table.
 type stubCredentialLookup struct {
-	active map[string]string // id -> kind
-	asked  []string
+	active    map[string]string // id -> kind
+	plaintext map[string]string // id -> decrypted value
+	asked     []string
+}
+
+func (s *stubCredentialLookup) PlaintextOfActive(_ context.Context, id string) (string, error) {
+	if plain, ok := s.plaintext[id]; ok {
+		return plain, nil
+	}
+	return "", context.DeadlineExceeded
 }
 
 func (s *stubCredentialLookup) KindOfActive(_ context.Context, id string) (string, bool) {

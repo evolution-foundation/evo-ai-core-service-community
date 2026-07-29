@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -185,8 +186,49 @@ func (h *agentIntegrationHandler) Delete(c *gin.Context) {
 // listKnowledgeNexusSpacesRequest is the body schema for the
 // POST /integrations/knowledge-nexus/list-spaces proxy endpoint.
 type listKnowledgeNexusSpacesRequest struct {
-	NexusBaseURL string `json:"nexus_base_url" binding:"required"`
-	NexusAPIKey  string `json:"nexus_api_key"  binding:"required"`
+	// Legacy mode: the user is typing a NEW configuration, so the caller holds
+	// both values and forwarding them adds no exposure.
+	NexusBaseURL string `json:"nexus_base_url"`
+	NexusAPIKey  string `json:"nexus_api_key"`
+	// Saved mode: the key was retired from the screen (story 2.7), so the
+	// server resolves BOTH the base URL and the credential from the agent's
+	// stored integration row.
+	AgentID string `json:"agent_id"`
+}
+
+// usesSavedCredential reports whether the server must resolve the target from
+// the stored integration instead of trusting the request.
+func (r listKnowledgeNexusSpacesRequest) usesSavedCredential() bool {
+	return strings.TrimSpace(r.AgentID) != "" && strings.TrimSpace(r.NexusAPIKey) == ""
+}
+
+// validate enforces the security invariant of this endpoint.
+//
+// ⚠️ A VAULT-RESOLVED key may only ever be sent to the base URL stored in the
+// SAME integration row. Accepting a server-resolved credential together with a
+// caller-supplied URL would turn `ai_agents:update` into a credential
+// exfiltration primitive: point the URL at your own host and harvest the
+// stored Nexus key. The two modes are therefore mutually exclusive, and mixing
+// them is REJECTED rather than silently resolved one way or the other.
+func (r listKnowledgeNexusSpacesRequest) validate() error {
+	hasReference := strings.TrimSpace(r.AgentID) != ""
+	hasKey := strings.TrimSpace(r.NexusAPIKey) != ""
+	hasURL := strings.TrimSpace(r.NexusBaseURL) != ""
+
+	if hasReference && hasKey {
+		return fmt.Errorf("send either agent_id or nexus_api_key, never both")
+	}
+	if hasReference && hasURL {
+		return fmt.Errorf("nexus_base_url cannot be supplied with agent_id: the saved base URL is used")
+	}
+	if hasReference {
+		return nil
+	}
+	if !hasKey || !hasURL {
+		return fmt.Errorf("nexus_base_url and nexus_api_key are required, or agent_id to use the saved credential")
+	}
+
+	return nil
 }
 
 // ListKnowledgeNexusSpaces proxies a GET to the user's EvoNexus instance to
@@ -201,13 +243,31 @@ func (h *agentIntegrationHandler) ListKnowledgeNexusSpaces(c *gin.Context) {
 		return
 	}
 
+	if err := req.validate(); err != nil {
+		response.ErrorResponse(c, "validation_error", err.Error(), nil, http.StatusBadRequest)
+		return
+	}
+
 	baseURL := strings.TrimRight(strings.TrimSpace(req.NexusBaseURL), "/")
 	apiKey := strings.TrimSpace(req.NexusAPIKey)
+
+	if req.usesSavedCredential() {
+		// Both values come from the SAME stored row, which is what keeps a
+		// resolved credential from ever reaching a caller-chosen host.
+		savedURL, savedKey, err := h.service.ResolveNexusTarget(c.Request.Context(), req.AgentID)
+		if err != nil {
+			response.ErrorResponse(c, "not_found", err.Error(), nil, http.StatusNotFound)
+			return
+		}
+		baseURL = strings.TrimRight(strings.TrimSpace(savedURL), "/")
+		apiKey = strings.TrimSpace(savedKey)
+	}
+
 	if baseURL == "" || apiKey == "" {
 		response.ErrorResponse(
 			c,
 			"validation_error",
-			"nexus_base_url and nexus_api_key are required",
+			"the saved Knowledge Nexus integration has no usable base URL and credential",
 			nil,
 			http.StatusBadRequest,
 		)

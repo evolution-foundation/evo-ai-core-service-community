@@ -9,7 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
-func InitModule(db *gorm.DB, router gin.IRouter) {
+// encryptionKey is the shared Fernet key: the Knowledge Nexus space discovery
+// resolves a vault credential server-side to build the upstream request.
+func InitModule(db *gorm.DB, router gin.IRouter, encryptionKey string) {
 	// Initialize repository
 	agentIntegrationRepository := repository.NewAgentIntegrationRepository(db)
 
@@ -18,7 +20,7 @@ func InitModule(db *gorm.DB, router gin.IRouter) {
 	// agent instead of on the next conversation.
 	agentIntegrationService := service.NewAgentIntegrationService(
 		agentIntegrationRepository,
-		repository.NewCredentialLookup(db),
+		repository.NewCredentialLookup(db, encryptionKey),
 	)
 
 	// Initialize handler and register routes

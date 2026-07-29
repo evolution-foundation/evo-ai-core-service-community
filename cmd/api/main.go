@@ -154,7 +154,7 @@ func main() {
 		integrationCredentialModule.Handler.RegisterRoutesMiddleware(v1)
 		agentModule.Handler.RegisterRoutesMiddleware(v1)
 		// Register agent integrations routes
-		agentIntegrationModule.InitModule(db, v1)
+		agentIntegrationModule.InitModule(db, v1, cfg.Core.EncryptionKey)
 		folderShareModule.Handler.RegisterRoutesMiddleware(v1)
 	}
 
