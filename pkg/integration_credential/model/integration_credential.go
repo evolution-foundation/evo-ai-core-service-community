@@ -166,9 +166,15 @@ type IntegrationCredentialResponse struct {
 	OwnerStore   *string   `json:"owner_store,omitempty"`
 	OwnerRef     *string   `json:"owner_ref,omitempty"`
 	ImportedFrom *string   `json:"imported_from,omitempty"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// Mirrored from the owner store at listing time, for oauth rows only.
+	// NEVER persisted: a stored copy goes stale on the first token rotation.
+	ConnectionStatus    string    `json:"connection_status,omitempty"`
+	ConnectionExpiresAt string    `json:"connection_expires_at,omitempty"`
+	AgentID             string    `json:"agent_id,omitempty"`
+	AgentName           string    `json:"agent_name,omitempty"`
+	IsActive            bool      `json:"is_active"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type IntegrationCredentialListResponse struct {

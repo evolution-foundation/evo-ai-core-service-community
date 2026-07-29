@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"evo-ai-core-service/internal/httpclient/errors"
 	"evo-ai-core-service/internal/httpclient/response"
@@ -26,16 +29,76 @@ type IntegrationCredentialHandler interface {
 	Delete(c *gin.Context)
 }
 
+// OAuthReconciler keeps the vault's oauth rows in step with the store that owns
+// the tokens, and decorates them with the state read live from it.
+type OAuthReconciler interface {
+	Run(ctx context.Context) error
+	Decorate(ctx context.Context, rows []model.IntegrationCredential, now time.Time) ([]*model.IntegrationCredentialResponse, error)
+}
+
 type integrationCredentialHandler struct {
 	credentialService service.IntegrationCredentialService
 	encryptionKey     string
+	oauthSync         OAuthReconciler
 }
 
-func NewIntegrationCredentialHandler(credentialService service.IntegrationCredentialService, encryptionKey string) IntegrationCredentialHandler {
+func NewIntegrationCredentialHandler(credentialService service.IntegrationCredentialService, encryptionKey string, oauthSync OAuthReconciler) IntegrationCredentialHandler {
 	return &integrationCredentialHandler{
 		credentialService: credentialService,
 		encryptionKey:     encryptionKey,
+		oauthSync:         oauthSync,
 	}
+}
+
+// decorateOAuthRows fills the mirrored connection state on oauth rows. Static
+// rows pass through untouched, and the mirrored fields are never persisted.
+func (h *integrationCredentialHandler) decorateOAuthRows(c *gin.Context, items []model.IntegrationCredentialResponse) ([]model.IntegrationCredentialResponse, error) {
+	if h.oauthSync == nil {
+		return items, nil
+	}
+
+	oauthRows := make([]model.IntegrationCredential, 0)
+	for _, item := range items {
+		if item.Kind == model.KindOAuth {
+			oauthRows = append(oauthRows, model.IntegrationCredential{
+				ID:         item.ID,
+				Name:       item.Name,
+				Provider:   item.Provider,
+				Kind:       item.Kind,
+				Scope:      item.Scope,
+				OwnerStore: item.OwnerStore,
+				OwnerRef:   item.OwnerRef,
+				IsActive:   item.IsActive,
+				CreatedAt:  item.CreatedAt,
+				UpdatedAt:  item.UpdatedAt,
+			})
+		}
+	}
+
+	if len(oauthRows) == 0 {
+		return items, nil
+	}
+
+	decorated, err := h.oauthSync.Decorate(c.Request.Context(), oauthRows, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[uuid.UUID]*model.IntegrationCredentialResponse, len(decorated))
+	for _, row := range decorated {
+		byID[row.ID] = row
+	}
+
+	result := make([]model.IntegrationCredentialResponse, 0, len(items))
+	for _, item := range items {
+		if enriched, ok := byID[item.ID]; ok {
+			result = append(result, *enriched)
+			continue
+		}
+		result = append(result, item)
+	}
+
+	return result, nil
 }
 
 // RegisterRoutesMiddleware registers the routes for the integration credential
@@ -205,6 +268,16 @@ func (h *integrationCredentialHandler) List(c *gin.Context) {
 		Provider: c.DefaultQuery("provider", ""),
 	}
 
+	// The oauth rows are reconciled on read: a connection made through the
+	// existing OAuth flow (which lives in the processor and is deliberately
+	// untouched) shows up on the next listing. A sync failure is not fatal, the
+	// static credentials still list.
+	if h.oauthSync != nil {
+		if err := h.oauthSync.Run(c.Request.Context()); err != nil {
+			log.Printf("integration credentials: oauth sync failed: %v", err)
+		}
+	}
+
 	list, err := h.credentialService.List(c.Request.Context(), req)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
@@ -212,7 +285,14 @@ func (h *integrationCredentialHandler) List(c *gin.Context) {
 		return
 	}
 
-	response.PaginatedResponse(c, list.Items, list.Page, list.PageSize, int(list.TotalItems), "Integration credentials retrieved successfully", http.StatusOK)
+	items, err := h.decorateOAuthRows(c, list.Items)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	response.PaginatedResponse(c, items, list.Page, list.PageSize, int(list.TotalItems), "Integration credentials retrieved successfully", http.StatusOK)
 }
 
 func (h *integrationCredentialHandler) Update(c *gin.Context) {

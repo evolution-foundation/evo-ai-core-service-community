@@ -63,7 +63,9 @@ func newTestHandler(t *testing.T) (*stubService, IntegrationCredentialHandler) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	stub := &stubService{}
-	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey)
+	// nil reconciler: these tests cover the static path, where the oauth sync
+	// must stay out of the way entirely.
+	return stub, NewIntegrationCredentialHandler(stub, fernetTestKey, nil)
 }
 
 func postJSON(t *testing.T, h func(*gin.Context), body string) *httptest.ResponseRecorder {

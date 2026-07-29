@@ -17,7 +17,10 @@ type Module struct {
 func New(db *gorm.DB, encryptionKey string) *Module {
 	r := repository.NewIntegrationCredentialRepository(db)
 	s := service.NewIntegrationCredentialService(r)
-	h := handler.NewIntegrationCredentialHandler(s, encryptionKey)
+	// The oauth sync reconciles reference rows on listing: the OAuth callbacks
+	// live in the processor and stay untouched.
+	oauthRepo := repository.NewOAuthConnectionRepository(db)
+	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo))
 
 	return &Module{
 		Handler: h,
