@@ -43,11 +43,15 @@ func (r *migrationStateRepository) PendingInlineSecrets(ctx context.Context, con
 	case model.ConsumerExternalAgents:
 		return r.pendingExternalAgents(ctx)
 	case model.ConsumerAgentBots:
-		// agent_bots lives in the CRM schema, which this service does not own.
-		// The CRM guard (Ai::IntegrationMigrationState) answers for it, so
-		// reporting zero here would be a lie: it is reported as pending until
-		// the CRM exposes it.
-		return 0, nil
+		// agent_bots lives in the CRM schema, which this service does not own:
+		// the CRM guard (Ai::IntegrationMigrationState) is the one that can
+		// actually answer for it. Reporting zero here would read as "retired"
+		// and let story 2.7 remove the bot's inline fallback on an installation
+		// that never migrated — the exact fail-open the guard forbids. A
+		// constant pending keeps the consumer NOT retired until a CRM-backed
+		// signal exists (adversarial review, 2026-07-29: the previous return 0
+		// contradicted this very comment).
+		return 1, nil
 	default:
 		return 0, nil
 	}

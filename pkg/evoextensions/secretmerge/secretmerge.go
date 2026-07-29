@@ -29,13 +29,29 @@ var safeHeaderNames = map[string]bool{
 	"x-correlation-id": true,
 }
 
-// KeepMissing carries stored entries over into an incoming map that omits them.
+// KeepMissing carries stored entries over into an incoming map that omits or
+// echoes them.
 //
-// An absent key means "keep what is stored"; a present key wins, even when
-// blank, because sending an empty value is how a screen says "clear this".
+// An absent key means "keep what is stored". A present key wins — EXCEPT when
+// it arrives empty under a redacted name and a stored value exists. That empty
+// is our own redaction coming back: RedactValues keeps the NAME with a blank
+// value, and the screens round-trip the object they received, so every save of
+// a tool with a secret header used to arrive as `Authorization: ""` and erase
+// the stored secret (the 1.6 modal data-loss path, found again in the
+// adversarial review of 2026-07-29). "Blank means clear" cannot coexist with a
+// redaction that sends blanks back on every GET; clearing an inline secret now
+// happens by replacing it with a vault reference (2.4) or retiring it (2.7).
+// Safe-listed names still honour a blank: their values are never redacted, so
+// a blank there is genuine user intent.
 func KeepMissing(incoming, stored map[string]string) map[string]string {
 	merged := make(map[string]string, len(incoming)+len(stored))
 	for key, value := range incoming {
+		if value == "" && !safeHeaderNames[strings.ToLower(key)] {
+			if storedValue, present := stored[key]; present {
+				merged[key] = storedValue
+				continue
+			}
+		}
 		merged[key] = value
 	}
 

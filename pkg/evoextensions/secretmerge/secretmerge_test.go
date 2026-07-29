@@ -43,16 +43,49 @@ func TestKeepMissingAcceptsADeliberateRotation(t *testing.T) {
 	}
 }
 
-// Sending an empty value is how a screen says "clear this": a present key wins,
-// even when blank.
-func TestKeepMissingHonoursExplicitBlank(t *testing.T) {
+// A blank under a REDACTED name is our own redaction echoing back, never user
+// intent: RedactValues sends `Authorization: ""` on every GET and the screens
+// round-trip what they received, so honouring the blank erased the stored
+// secret on every save (the 1.6 modal data-loss path, again).
+func TestKeepMissingTreatsRedactedEchoAsKeep(t *testing.T) {
 	merged := KeepMissing(
 		map[string]string{"Authorization": ""},
 		map[string]string{"Authorization": "Bearer velho"},
 	)
 
-	if merged["Authorization"] != "" {
-		t.Errorf("an explicit clear was overridden: %q", merged["Authorization"])
+	if merged["Authorization"] != "Bearer velho" {
+		t.Errorf("the redacted echo erased the stored secret: %q", merged["Authorization"])
+	}
+}
+
+// The composition property that makes the round trip safe by construction:
+// saving back exactly what the GET returned changes nothing.
+func TestRedactThenMergeIsLossless(t *testing.T) {
+	stored := map[string]string{
+		"Authorization": "Bearer secreto",
+		"X-Tenant-Auth": "tk-1",
+		"Content-Type":  "application/json",
+	}
+
+	merged := KeepMissing(RedactValues(stored), stored)
+
+	for key, want := range stored {
+		if merged[key] != want {
+			t.Errorf("%s = %q after a redacted round trip, want %q", key, merged[key], want)
+		}
+	}
+}
+
+// Safe-listed names are never redacted, so a blank there IS user intent and
+// still clears.
+func TestKeepMissingHonoursBlankOnSafeNames(t *testing.T) {
+	merged := KeepMissing(
+		map[string]string{"Content-Type": ""},
+		map[string]string{"Content-Type": "application/json"},
+	)
+
+	if merged["Content-Type"] != "" {
+		t.Errorf("a genuine clear on a safe header was overridden: %q", merged["Content-Type"])
 	}
 }
 
