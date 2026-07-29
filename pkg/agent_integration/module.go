@@ -13,8 +13,13 @@ func InitModule(db *gorm.DB, router gin.IRouter) {
 	// Initialize repository
 	agentIntegrationRepository := repository.NewAgentIntegrationRepository(db)
 
-	// Initialize service
-	agentIntegrationService := service.NewAgentIntegrationService(agentIntegrationRepository)
+	// Initialize service. The credential lookup validates a vault reference on
+	// write, so an unusable credential_id fails for whoever is configuring the
+	// agent instead of on the next conversation.
+	agentIntegrationService := service.NewAgentIntegrationService(
+		agentIntegrationRepository,
+		repository.NewCredentialLookup(db),
+	)
 
 	// Initialize handler and register routes
 	agentIntegrationHandler := handler.NewAgentIntegrationHandler(agentIntegrationService)

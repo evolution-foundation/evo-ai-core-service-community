@@ -39,6 +39,77 @@ type AgentIntegrationResponse struct {
 	UpdatedAt time.Time              `json:"updated_at"`
 }
 
+// sensitiveFieldNames are the config keys that carry a secret and must never
+// reach a client. The OAuth names were here from the start; the platform ones
+// (apiKey, basicAuth*, nexus_api_key) were NOT, so until story 2.3 the secret
+// of every external agent was echoed to anyone holding ai_agents:read.
+//
+// This list is also what MergePreservedSecrets protects on write: a field that
+// stops being returned must stop being overwritten by a save that never carried
+// it, or sanitizing the response would erase the stored secret.
+var sensitiveFieldNames = []string{
+	"access_token",
+	"client_id",
+	"client_secret",
+	"refresh_token",
+	"pkce_verifiers",
+	"token", // Google Calendar token
+	"code_verifier",
+	// Platform credentials of external agents and native tools.
+	"apiKey",
+	"api_key",
+	"basicAuthUser", // half of a basic auth pair is still half a credential
+	"basicAuthPass",
+	"nexus_api_key",
+}
+
+// CredentialIDFrom reports the vault reference carried by a config, if any.
+// Its absence is the signal to fall back to the inline value, which is what
+// keeps this story from breaking installations that have not migrated.
+func CredentialIDFrom(config map[string]interface{}) (string, bool) {
+	if config == nil {
+		return "", false
+	}
+
+	value, ok := config["credential_id"].(string)
+	if !ok || value == "" {
+		return "", false
+	}
+
+	return value, true
+}
+
+// MergePreservedSecrets carries stored secrets over into an incoming config
+// that omits them.
+//
+// The screens round-trip the object they received: they load fields from the
+// GET and send the whole thing back on save. Since sanitizeConfig stopped
+// returning the platform secrets, a save now arrives WITHOUT them, and a plain
+// overwrite (the upsert replaces `config` wholesale) would erase the stored
+// value. An absent key means "keep what is stored"; a present one wins, even
+// when blank, because sending an empty string is how a screen says "clear it".
+func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]interface{} {
+	merged := make(map[string]interface{}, len(incoming))
+	for key, value := range incoming {
+		merged[key] = value
+	}
+
+	if stored == nil {
+		return merged
+	}
+
+	for _, field := range sensitiveFieldNames {
+		if _, present := merged[field]; present {
+			continue
+		}
+		if storedValue, exists := stored[field]; exists {
+			merged[field] = storedValue
+		}
+	}
+
+	return merged
+}
+
 // sanitizeConfig removes ALL sensitive fields from integration config before returning to frontend.
 // Security: Frontend should NEVER receive access_token, client_id, or any credentials.
 // Discovery of tools should be done via backend endpoints that use stored credentials.
@@ -53,19 +124,8 @@ func sanitizeConfig(config map[string]interface{}) map[string]interface{} {
 		sanitized[k] = v
 	}
 
-	// List of sensitive fields to remove (including access_token and client_id)
-	sensitiveFields := []string{
-		"access_token",
-		"client_id",
-		"client_secret",
-		"refresh_token",
-		"pkce_verifiers",
-		"token", // Google Calendar token
-		"code_verifier",
-	}
-
 	// Remove sensitive fields
-	for _, field := range sensitiveFields {
+	for _, field := range sensitiveFieldNames {
 		delete(sanitized, field)
 	}
 
