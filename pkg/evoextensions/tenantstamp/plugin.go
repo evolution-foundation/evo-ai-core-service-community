@@ -87,6 +87,12 @@ var tenantScopedWriteTables = map[string]struct{}{
 	"evo_core_mcp_servers":        {},
 	"evo_core_custom_mcp_servers": {},
 	"evo_core_agent_integrations": {},
+	// Ships with the vault table (story 2.1). The entry only takes effect under
+	// `-tags=enterprise`, where this plugin is registered, and it PAIRS with the
+	// gem migration that adds tenant_id + the tight RLS policy to the table:
+	// the list means "tables whose policy USING has no `IS NULL`", so both must
+	// land in the same release for the invariant above to keep holding.
+	"evo_core_integration_credentials": {},
 }
 
 // callbackName must be unique across registered Create callbacks.

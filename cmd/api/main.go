@@ -15,6 +15,7 @@ import (
 	customToolModule "evo-ai-core-service/pkg/custom_tool"
 	folderModule "evo-ai-core-service/pkg/folder"
 	folderShareModule "evo-ai-core-service/pkg/folder_share"
+	integrationCredentialModule "evo-ai-core-service/pkg/integration_credential"
 	mcpServerModule "evo-ai-core-service/pkg/mcp_server"
 	"flag"
 	"fmt"
@@ -26,7 +27,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
-
 )
 
 func main() {
@@ -81,6 +81,9 @@ func main() {
 	customToolModule := customToolModule.New(db)
 	customMcpServerModule := customMcpServerModule.New(db, &cfg.AIProcessorService)
 	apiKeyModule := apiKeyModule.New(db, cfg.Core.EncryptionKey)
+	// Same Fernet key as the AI credential registry: the processor decrypts both
+	// with the ENCRYPTION_KEY it already shares with this service.
+	integrationCredentialModule := integrationCredentialModule.New(db, cfg.Core.EncryptionKey)
 	folderModule := folderModule.New(db)
 	folderShareModule := folderShareModule.New(db, folderModule.Service)
 	agentModule := agentModule.New(
@@ -146,6 +149,9 @@ func main() {
 		folderModule.Handler.RegisterRoutesMiddleware(v1)
 		// Register API keys before agents to ensure /agents/apikeys is captured first
 		apiKeyModule.Handler.RegisterRoutesMiddleware(v1)
+		// Top-level group, so it carries none of the /agents/:id ordering
+		// hazard the api keys routes have to work around.
+		integrationCredentialModule.Handler.RegisterRoutesMiddleware(v1)
 		agentModule.Handler.RegisterRoutesMiddleware(v1)
 		// Register agent integrations routes
 		agentIntegrationModule.InitModule(db, v1)
