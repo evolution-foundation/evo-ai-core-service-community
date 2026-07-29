@@ -24,11 +24,12 @@ const fernetTestKey = "cw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4="
 // persisted ciphertext and hint without a database.
 type stubService struct {
 	service.IntegrationCredentialService
-	created     model.IntegrationCredential
-	updated     *model.IntegrationCredential
-	listed      []model.IntegrationCredential
-	listRequest model.IntegrationCredentialListRequest
-	createCalls int
+	created         model.IntegrationCredential
+	updated         *model.IntegrationCredential
+	updatedIsActive *bool
+	listed          []model.IntegrationCredential
+	listRequest     model.IntegrationCredentialListRequest
+	createCalls     int
 }
 
 func (s *stubService) Create(_ context.Context, request model.IntegrationCredential) (*model.IntegrationCredential, error) {
@@ -38,8 +39,9 @@ func (s *stubService) Create(_ context.Context, request model.IntegrationCredent
 	return &request, nil
 }
 
-func (s *stubService) Update(_ context.Context, request *model.IntegrationCredential, id uuid.UUID) (*model.IntegrationCredential, error) {
+func (s *stubService) Update(_ context.Context, request *model.IntegrationCredential, isActive *bool, id uuid.UUID) (*model.IntegrationCredential, error) {
 	s.updated = request
+	s.updatedIsActive = isActive
 	stored := *request
 	stored.ID = id
 	return &stored, nil
@@ -281,6 +283,53 @@ func TestUpdateWithoutValueKeepsTheStoredOne(t *testing.T) {
 	}
 	if stub.updated.ValueHint != "" {
 		t.Errorf("update carries a hint (%q); it would desync from the stored secret", stub.updated.ValueHint)
+	}
+}
+
+// The screen's activate/deactivate toggle travels as is_active on the update.
+// A pointer is what lets `false` through: with a plain bool the zero value is
+// indistinguishable from "not sent", and deactivation becomes a silent no-op
+// (the exact bug the adversarial review of 2026-07-29 found).
+func TestUpdatePassesIsActiveThrough(t *testing.T) {
+	stub, handler := newTestHandler(t)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/integration-credentials/x",
+		bytes.NewBufferString(`{"name":"Dify","provider":"dify","is_active":false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.Update(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if stub.updatedIsActive == nil {
+		t.Fatal("is_active=false never reached the service: the deactivate toggle is a no-op")
+	}
+	if *stub.updatedIsActive {
+		t.Error("is_active arrived as true, want false")
+	}
+}
+
+func TestUpdateWithoutIsActiveKeepsTheStoredState(t *testing.T) {
+	stub, handler := newTestHandler(t)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/integration-credentials/x",
+		bytes.NewBufferString(`{"name":"Dify","provider":"dify"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.Update(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if stub.updatedIsActive != nil {
+		t.Errorf("an omitted is_active must stay nil (keep stored state), got %v", *stub.updatedIsActive)
 	}
 }
 

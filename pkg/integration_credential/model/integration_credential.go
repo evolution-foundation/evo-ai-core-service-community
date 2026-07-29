@@ -151,6 +151,11 @@ type IntegrationCredentialUpdateRequest struct {
 	Scope       string `json:"scope"`
 	ValueFormat string `json:"value_format"`
 	Value       string `json:"value"`
+	// Pointer on purpose: `false` is a meaningful value (deactivate), so a
+	// zero-value bool could not tell "turn it off" apart from "not sent".
+	// Without this field the screen's activate/deactivate toggle was a silent
+	// no-op (adversarial review, 2026-07-29).
+	IsActive *bool `json:"is_active"`
 }
 
 // IntegrationCredentialResponse carries the hint and never the value, in either

@@ -15,7 +15,7 @@ type IntegrationCredentialService interface {
 	Create(ctx context.Context, request model.IntegrationCredential) (*model.IntegrationCredential, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.IntegrationCredential, error)
 	List(ctx context.Context, request model.IntegrationCredentialListRequest) (*model.IntegrationCredentialListResponse, error)
-	Update(ctx context.Context, request *model.IntegrationCredential, id uuid.UUID) (*model.IntegrationCredential, error)
+	Update(ctx context.Context, request *model.IntegrationCredential, isActive *bool, id uuid.UUID) (*model.IntegrationCredential, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
@@ -75,12 +75,12 @@ func (s *integrationCredentialService) List(ctx context.Context, request model.I
 	}, nil
 }
 
-func (s *integrationCredentialService) Update(ctx context.Context, request *model.IntegrationCredential, id uuid.UUID) (*model.IntegrationCredential, error) {
+func (s *integrationCredentialService) Update(ctx context.Context, request *model.IntegrationCredential, isActive *bool, id uuid.UUID) (*model.IntegrationCredential, error) {
 	if _, err := s.GetByID(ctx, id); err != nil {
 		return nil, errors.New("Integration credential not found")
 	}
 
-	credential, err := s.repository.Update(ctx, request, id)
+	credential, err := s.repository.Update(ctx, request, isActive, id)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.IntegrationCredentialErrors)
 	}

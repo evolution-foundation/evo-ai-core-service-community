@@ -350,7 +350,7 @@ func (h *integrationCredentialHandler) Update(c *gin.Context) {
 		credential.ValueHint = hint
 	}
 
-	updated, err := h.credentialService.Update(c.Request.Context(), credential, id)
+	updated, err := h.credentialService.Update(c.Request.Context(), credential, req.IsActive, id)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
