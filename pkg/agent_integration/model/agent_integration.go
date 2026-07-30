@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/pkg/evoextensions/tenantfield"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,15 +100,47 @@ func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]i
 	}
 
 	for _, field := range sensitiveFieldNames {
-		if _, present := merged[field]; present {
+		storedValue, exists := stored[field]
+		if !exists {
 			continue
 		}
-		if storedValue, exists := stored[field]; exists {
+
+		incomingValue, present := merged[field]
+		if !present {
+			// Absent means "keep what is stored".
+			merged[field] = storedValue
+			continue
+		}
+
+		// PRESENT AND BLANK also means "keep what is stored", the same rule
+		// secretmerge.KeepMissing follows for headers.
+		//
+		// The two used to disagree: this one treated a blank as "clear", which
+		// was only safe because the screen was fixed to omit the field (front
+		// commit 89f27c6). Any other client echoing `apiKey: ""` back — and the
+		// GET is sanitized, so every client gets a blank — erased the stored
+		// secret. One round-trip, one semantics (EVO-2250 review, MÉDIO 9).
+		//
+		// Clearing a secret is done by pointing the consumer at a vault
+		// credential (2.4) or by retiring the inline field (2.7), never by
+		// saving an empty string.
+		if isBlankSecret(incomingValue) {
 			merged[field] = storedValue
 		}
 	}
 
 	return merged
+}
+
+// isBlankSecret reports a value that carries no secret: the empty string, or
+// whitespace only. Non-strings are never blank — a caller sending a number or
+// an object is doing something deliberate.
+func isBlankSecret(value interface{}) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(text) == ""
 }
 
 // sanitizeConfig removes ALL sensitive fields from integration config before returning to frontend.

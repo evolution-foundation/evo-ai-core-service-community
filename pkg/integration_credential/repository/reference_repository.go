@@ -12,19 +12,19 @@ import (
 
 // referenceRepository reads every consumer that points at a vault credential.
 //
-// ⚠️ DECISÃO DE FRONTEIRA, e ela reverte uma escrita anterior deste mesmo
-// pacote. O comentário do `migrationStateRepository` dizia que `agent_bots`
-// vive no schema do CRM e que este serviço não o lê. Aqui ele passa a ler.
+// ⚠️ BOUNDARY DECISION, and it reverses an earlier note in this same package.
+// The comment on `migrationStateRepository` said `agent_bots` lives in the CRM
+// schema and that this service does not read it. Here it does.
 //
-// O motivo: `evo_community` é UM banco só, compartilhado pelos dois serviços, e
-// as alternativas são piores. Go chamando o Rails por HTTP reintroduz o problema
-// de bearer que moldou a 1.2 (esta consulta roda sem usuário logado), e o Rails
-// escrevendo uma coluna de agregação duplicaria estado que já existe. O que a
-// story 2.5 decidiu continua valendo para ESTADO DE MIGRAÇÃO, onde a resposta
-// depende de regra de negócio do CRM; aqui é leitura de fato consumada.
+// The reason: `evo_community` is ONE database shared by both services, and the
+// alternatives are worse. Go calling Rails over HTTP reintroduces the bearer
+// problem that shaped story 1.2 (this query runs with no logged-in user), and
+// having Rails write an aggregation column would duplicate state that already
+// exists. What story 2.5 decided still holds for MIGRATION STATE, where the
+// answer depends on CRM business rules; this is a read of settled fact.
 //
-// Cada store é lido numa consulta agrupada, nunca por credencial: a tela lista
-// N credenciais, e perguntar por credencial seriam 5N idas ao banco.
+// Each store is read in one grouped query, never per credential: the screen
+// lists N credentials, and asking per credential would be 5N round trips.
 type referenceRepository struct {
 	db *gorm.DB
 }

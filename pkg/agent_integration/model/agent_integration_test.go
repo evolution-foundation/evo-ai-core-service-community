@@ -126,14 +126,54 @@ func TestMergePreservedSecretsAcceptsAnExplicitNewSecret(t *testing.T) {
 
 // Sending an empty string is how a screen says "clear this": it is a present
 // key, so it must win over the stored value instead of being treated as absent.
-func TestMergePreservedSecretsHonoursExplicitBlank(t *testing.T) {
+// EVO-2250 review, MÉDIO 9: this used to assert the opposite ("an explicit
+// blank clears"). That semantics disagreed with secretmerge.KeepMissing for the
+// very same round trip, and it was only safe because ONE client (the screen)
+// was fixed to omit the field. The GET is sanitized, so every client reads a
+// blank back — any other one echoing it erased the stored secret.
+//
+// One round trip, one rule: absent OR blank means "keep the stored secret".
+// Clearing happens by pointing at a vault credential (2.4) or retiring the
+// inline field (2.7).
+func TestMergePreservedSecretsTreatsBlankAsKeep(t *testing.T) {
 	stored := map[string]interface{}{"apiKey": "app-dify-velha"}
-	incoming := map[string]interface{}{"apiKey": ""}
 
-	merged := MergePreservedSecrets(incoming, stored)
+	for _, blank := range []interface{}{"", "   "} {
+		merged := MergePreservedSecrets(map[string]interface{}{"apiKey": blank}, stored)
 
-	if merged["apiKey"] != "" {
-		t.Errorf("an explicit clear was overridden by the stored value: %v", merged["apiKey"])
+		if merged["apiKey"] != "app-dify-velha" {
+			t.Errorf("a blank echo erased the stored secret: %v", merged["apiKey"])
+		}
+	}
+}
+
+// The composition property that makes the round trip safe by construction:
+// saving back exactly what the sanitized GET returned changes nothing.
+func TestSanitizeThenMergeIsLossless(t *testing.T) {
+	stored := map[string]interface{}{
+		"apiKey":  "app-dify-secreta",
+		"apiUrl":  "https://api.dify.ai/v1",
+		"botType": "chatBot",
+	}
+
+	merged := MergePreservedSecrets(sanitizeConfig(stored), stored)
+
+	for key, want := range stored {
+		if merged[key] != want {
+			t.Errorf("%s = %v after a sanitized round trip, want %v", key, merged[key], want)
+		}
+	}
+}
+
+// A deliberate rotation still wins: only blanks are read as "keep".
+func TestMergePreservedSecretsHonoursARotation(t *testing.T) {
+	merged := MergePreservedSecrets(
+		map[string]interface{}{"apiKey": "app-dify-nova"},
+		map[string]interface{}{"apiKey": "app-dify-velha"},
+	)
+
+	if merged["apiKey"] != "app-dify-nova" {
+		t.Errorf("a deliberate rotation was ignored: %v", merged["apiKey"])
 	}
 }
 

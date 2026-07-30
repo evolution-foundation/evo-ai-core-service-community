@@ -96,8 +96,24 @@ func (r *apiKeyRepository) Count(ctx context.Context, active string, scope strin
 
 func (r *apiKeyRepository) Update(ctx context.Context, apiKey *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
 	apiKey.UpdatedAt = time.Now()
+
+	// Clearing the endpoint back to the provider default writes NULL, and GORM
+	// skips nil pointers in a struct Updates — so an explicit clear would have
+	// been a silent no-op, exactly like the deactivation toggle was. The
+	// handler signals it with a non-nil BaseURLSet carrying a nil BaseURL.
+	baseURLCleared := apiKey.BaseURLSet && apiKey.BaseURL == nil
+
 	if err := r.db.WithContext(ctx).Where("id = ?", id).Updates(apiKey).Error; err != nil {
 		return nil, err
+	}
+
+	if baseURLCleared {
+		if err := r.db.WithContext(ctx).
+			Model(&model.ApiKey{}).
+			Where("id = ?", id).
+			Update("base_url", nil).Error; err != nil {
+			return nil, err
+		}
 	}
 
 	// GORM's struct Updates skips zero values, so `false` could never travel

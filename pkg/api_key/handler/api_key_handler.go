@@ -174,6 +174,7 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 		Scope:    scope,
 		Key:      encryptedKey,
 		KeyHint:  model.DeriveKeyHint(actualKey),
+		BaseURL:  model.NormalizeBaseURL(req.BaseURL),
 	}
 
 	createdApiKey, err := h.apiKeyService.Create(c.Request.Context(), apiKey)
@@ -285,6 +286,14 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 	// a provided one is normalized so no request can write an invalid scope.
 	if req.Scope != "" {
 		apiKey.Scope = model.NormalizeScope(req.Scope)
+	}
+
+	// An omitted base_url keeps the stored endpoint; an explicit one (including
+	// "", which means "back to the provider default") is written. GORM skips
+	// nil, so absence is what leaves the column alone.
+	if req.BaseURL != nil {
+		apiKey.BaseURL = model.NormalizeBaseURL(*req.BaseURL)
+		apiKey.BaseURLSet = true
 	}
 
 	// Two ways to touch the installation default, and BOTH need the privilege:
