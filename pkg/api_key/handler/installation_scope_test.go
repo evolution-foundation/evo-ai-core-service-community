@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,7 @@ type contextKey string
 type scopeStubService struct {
 	service.ApiKeyService
 	stored      *model.ApiKey
+	getErr      error
 	createCalls int
 	updateCalls int
 	deleteCalls int
@@ -43,6 +45,9 @@ func (s *scopeStubService) Create(_ context.Context, request model.ApiKey) (*mod
 }
 
 func (s *scopeStubService) GetByID(_ context.Context, id uuid.UUID) (*model.ApiKey, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if s.stored == nil {
 		return nil, nil
 	}
@@ -258,5 +263,63 @@ func TestInstallationScopeDeniedWhenPermissionCheckFails(t *testing.T) {
 	}
 	if stub.createCalls != 0 {
 		t.Error("service was reached despite the failed permission check")
+	}
+}
+
+// EVO-2250 re-review, MÉDIO 2: an unreadable target used to WAIVE the gate.
+// `if stored, err := GetByID(...); err == nil && stored != nil` left
+// touchesInstallation false on error, so the write went through unauthorized.
+func TestUpdateDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
+	permissions := withPermission(t, false, nil)
+	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}
+	handler := newScopeHandler(stub)
+
+	c, recorder := requestWithToken(http.MethodPut, `{"name":"Qualquer","provider":"openai"}`)
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	handler.Update(c)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if stub.updateCalls != 0 {
+		t.Error("the write ran while the gate could not tell what it was guarding")
+	}
+	if len(permissions.asked) == 0 {
+		t.Error("the gate was never consulted on an unreadable target")
+	}
+}
+
+func TestDeleteDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
+	withPermission(t, false, nil)
+	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}
+	handler := newScopeHandler(stub)
+
+	c, recorder := requestWithToken(http.MethodDelete, "")
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	handler.Delete(c)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if stub.deleteCalls != 0 {
+		t.Error("the credential was deleted while the gate could not read it")
+	}
+}
+
+// The grant still passes: failing closed must not mean failing always.
+func TestUnreadableTargetPassesWithManage(t *testing.T) {
+	withPermission(t, true, nil)
+	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}
+	handler := newScopeHandler(stub)
+
+	c, recorder := requestWithToken(http.MethodDelete, "")
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	handler.Delete(c)
+
+	if recorder.Code == http.StatusForbidden {
+		t.Fatalf("installation_configs.manage was granted and still got 403: %s", recorder.Body.String())
+	}
+	if stub.deleteCalls != 1 {
+		t.Errorf("delete calls = %d, want 1", stub.deleteCalls)
 	}
 }

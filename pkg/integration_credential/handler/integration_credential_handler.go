@@ -214,7 +214,12 @@ func (h *integrationCredentialHandler) authorizeScopeWrite(c *gin.Context, reque
 	touchesInstallation := requestedScope == model.ScopeInstallation
 
 	if !touchesInstallation {
-		if stored, err := h.credentialService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+		// A failed lookup demands the privilege, same as the api_key handler.
+		stored, err := h.credentialService.GetByID(c.Request.Context(), id)
+		switch {
+		case err != nil:
+			touchesInstallation = true
+		case stored != nil:
 			touchesInstallation = stored.Scope == model.ScopeInstallation
 		}
 	}

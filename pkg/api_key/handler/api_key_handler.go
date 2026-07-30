@@ -92,9 +92,15 @@ func (h *apiKeyHandler) authorizeScopeWrite(c *gin.Context, requestedScope strin
 
 	if !touchesInstallation {
 		// The stored scope decides when the request omits one, and it also
-		// covers demoting an installation credential to account level: that is
-		// a write to the installation default too.
-		if stored, err := h.apiKeyService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+		// covers demoting an installation credential to account level.
+		//
+		// A failed lookup demands the privilege rather than waiving it: the cost
+		// is a 403 where a missing row would have answered 404.
+		stored, err := h.apiKeyService.GetByID(c.Request.Context(), id)
+		switch {
+		case err != nil:
+			touchesInstallation = true
+		case stored != nil:
 			touchesInstallation = stored.Scope == model.ScopeInstallation
 		}
 	}

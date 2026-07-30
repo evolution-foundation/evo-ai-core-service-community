@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,6 +30,7 @@ type contextKey string
 type scopeStubService struct {
 	stubService
 	stored      *model.IntegrationCredential
+	getErr      error
 	createCalls int
 	updateCalls int
 	deleteCalls int
@@ -40,6 +42,9 @@ func (s *scopeStubService) Create(ctx context.Context, request model.Integration
 }
 
 func (s *scopeStubService) GetByID(_ context.Context, id uuid.UUID) (*model.IntegrationCredential, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if s.stored == nil {
 		return &model.IntegrationCredential{Scope: model.ScopeAccount}, nil
 	}
@@ -228,5 +233,24 @@ func TestInstallationScopeDeniedWhenPermissionCheckFails(t *testing.T) {
 	}
 	if stub.createCalls != 0 {
 		t.Error("service was reached despite the failed permission check")
+	}
+}
+
+// EVO-2250 re-review, MÉDIO 2: an unreadable target used to WAIVE the gate here
+// too. Same defect, same fix as the api_key handler.
+func TestDeleteDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
+	withPermission(t, false, nil)
+	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}
+	handler := newScopeHandler(stub)
+
+	c, recorder := scopeRequest(http.MethodDelete, "")
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	handler.Delete(c)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if stub.deleteCalls != 0 {
+		t.Error("the credential was deleted while the gate could not read it")
 	}
 }
