@@ -33,6 +33,13 @@ type stubService struct {
 	createCalls     int
 }
 
+// GetByID answers for the scope gate (EVO-2250 review, ALTO 5), which reads
+// the stored credential before allowing a write that touches the installation
+// default. Embedding the interface alone left it nil and panicked.
+func (s *stubService) GetByID(_ context.Context, _ uuid.UUID) (*model.IntegrationCredential, error) {
+	return &model.IntegrationCredential{Scope: model.ScopeAccount}, nil
+}
+
 func (s *stubService) Create(_ context.Context, request model.IntegrationCredential) (*model.IntegrationCredential, error) {
 	s.created = request
 	s.createCalls++
@@ -65,6 +72,10 @@ func (s *stubService) List(_ context.Context, request model.IntegrationCredentia
 func newTestHandler(t *testing.T) (*stubService, IntegrationCredentialHandler) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
+	// These tests are about encryption, hints and kinds, not authorization, so
+	// they run with the installation privilege granted. The gate itself has its
+	// own path tests in installation_scope_test.go.
+	withPermission(t, true, nil)
 	stub := &stubService{}
 	// nil reconciler: these tests cover the static path, where the oauth sync
 	// must stay out of the way entirely.

@@ -207,6 +207,25 @@ func (h *integrationCredentialHandler) RegisterRoutesMiddleware(router gin.IRout
 	}
 }
 
+// authorizeScopeWrite guards a write that touches the installation scope,
+// either by requesting it or by targeting a credential already stored with it.
+// Returns false when the response has already been written.
+func (h *integrationCredentialHandler) authorizeScopeWrite(c *gin.Context, requestedScope string, id uuid.UUID) bool {
+	touchesInstallation := requestedScope == model.ScopeInstallation
+
+	if !touchesInstallation {
+		if stored, err := h.credentialService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+			touchesInstallation = stored.Scope == model.ScopeInstallation
+		}
+	}
+
+	if !touchesInstallation {
+		return true
+	}
+
+	return middleware.RequireInstallationScope(c)
+}
+
 // encryptValue uses the same Fernet key the api_key handler does, shared with
 // evo-ai-processor through ENCRYPTION_KEY so the runtime can decrypt what the
 // screen stored.
@@ -262,6 +281,14 @@ func (h *integrationCredentialHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// The installation scope is a separate privilege: this credential becomes
+	// the default every account inherits. Checked here and not on the route
+	// because the scope travels in the body (EVO-2250 review, ALTO 5).
+	scope := model.NormalizeScope(req.Scope)
+	if scope == model.ScopeInstallation && !middleware.RequireInstallationScope(c) {
+		return
+	}
+
 	valueFormat := model.NormalizeValueFormat(req.ValueFormat)
 
 	hint, err := deriveHint(req.Value, valueFormat)
@@ -281,7 +308,7 @@ func (h *integrationCredentialHandler) Create(c *gin.Context) {
 		Name:        req.Name,
 		Provider:    req.Provider,
 		Kind:        model.KindStatic,
-		Scope:       model.NormalizeScope(req.Scope),
+		Scope:       scope,
 		ValueFormat: valueFormat,
 		Value:       encryptedValue,
 		ValueHint:   hint,
@@ -401,6 +428,12 @@ func (h *integrationCredentialHandler) Update(c *gin.Context) {
 		credential.Scope = model.NormalizeScope(req.Scope)
 	}
 
+	// Promoting into the installation scope AND editing a credential already
+	// stored with it both need the privilege (EVO-2250 review, ALTO 5).
+	if !h.authorizeScopeWrite(c, credential.Scope, id) {
+		return
+	}
+
 	// An empty value means "keep the stored one": GORM's Updates skips
 	// zero-valued struct fields, so Value, ValueFormat and ValueHint stay
 	// untouched and the hint never desyncs from the secret.
@@ -440,6 +473,11 @@ func (h *integrationCredentialHandler) Delete(c *gin.Context) {
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	// Deleting the installation default is a write to it.
+	if !h.authorizeScopeWrite(c, "", id) {
 		return
 	}
 

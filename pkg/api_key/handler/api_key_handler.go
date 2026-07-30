@@ -84,6 +84,28 @@ func (h *apiKeyHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 	}
 }
 
+// authorizeScopeWrite guards an update that touches the installation scope,
+// either by writing it or by targeting a credential already stored with it.
+// Returns false when the response has already been written.
+func (h *apiKeyHandler) authorizeScopeWrite(c *gin.Context, requestedScope string, id uuid.UUID) bool {
+	touchesInstallation := requestedScope == model.ScopeInstallation
+
+	if !touchesInstallation {
+		// The stored scope decides when the request omits one, and it also
+		// covers demoting an installation credential to account level: that is
+		// a write to the installation default too.
+		if stored, err := h.apiKeyService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+			touchesInstallation = stored.Scope == model.ScopeInstallation
+		}
+	}
+
+	if !touchesInstallation {
+		return true
+	}
+
+	return middleware.RequireInstallationScope(c)
+}
+
 func (h *apiKeyHandler) decryptKey(encrypted string) (string, error) {
 	fernetKey, err := fernet.DecodeKey(h.encryptionKey)
 	if err != nil {
@@ -131,6 +153,14 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// The installation scope is a separate privilege: this credential becomes
+	// the default every account inherits. The check lives HERE and not on the
+	// route because the scope travels in the body (EVO-2250 review, ALTO 5).
+	scope := model.NormalizeScope(req.Scope)
+	if scope == model.ScopeInstallation && !middleware.RequireInstallationScope(c) {
+		return
+	}
+
 	encryptedKey, err := h.encryptKey(actualKey)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
@@ -141,7 +171,7 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 	apiKey := model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
-		Scope:    model.NormalizeScope(req.Scope),
+		Scope:    scope,
 		Key:      encryptedKey,
 		KeyHint:  model.DeriveKeyHint(actualKey),
 	}
@@ -257,6 +287,15 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 		apiKey.Scope = model.NormalizeScope(req.Scope)
 	}
 
+	// Two ways to touch the installation default, and BOTH need the privilege:
+	// promoting an account credential into it, and editing one that already is
+	// (an omitted scope keeps the stored one, so reading the target is what
+	// closes that half). Same gate as Create, checked here because the scope
+	// lives in the body (EVO-2250 review, ALTO 5).
+	if !h.authorizeScopeWrite(c, apiKey.Scope, id) {
+		return
+	}
+
 	// An empty key means "keep the stored one": GORM's Updates skips zero-valued
 	// struct fields, so Key and KeyHint stay untouched.
 	if actualKey := req.GetKey(); actualKey != "" {
@@ -336,6 +375,12 @@ func (h *apiKeyHandler) Delete(c *gin.Context) {
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	// Deleting the installation default is a write to it: same privilege as
+	// creating or editing one.
+	if !h.authorizeScopeWrite(c, "", id) {
 		return
 	}
 

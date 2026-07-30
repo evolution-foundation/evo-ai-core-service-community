@@ -30,6 +30,13 @@ type stubService struct {
 	listRequest     model.ApiKeyListRequest
 }
 
+// GetByID answers for the scope gate (EVO-2250 review, ALTO 5), which reads
+// the stored credential before allowing a write that touches the installation
+// default. Embedding the interface alone left it nil and panicked.
+func (s *stubService) GetByID(_ context.Context, _ uuid.UUID) (*model.ApiKey, error) {
+	return &model.ApiKey{Scope: model.ScopeAccount}, nil
+}
+
 func (s *stubService) Create(_ context.Context, request model.ApiKey) (*model.ApiKey, error) {
 	s.created = request
 	request.ID = uuid.New()
@@ -189,6 +196,10 @@ func TestListNeverReturnsAnyKey(t *testing.T) {
 // EVO-2250 story 1.2: credentials carry the scope they belong to. The
 // resolution chain itself lives in the CRM — this service only stores it.
 func TestCreateStoresRequestedScope(t *testing.T) {
+	// This test is about storage, not authorization: it runs with the
+	// installation privilege granted. The gate has its own path tests in
+	// installation_scope_test.go.
+	withPermission(t, true, nil)
 	svc := &stubService{}
 
 	call(t, http.MethodPost, "/agents/apikeys",
