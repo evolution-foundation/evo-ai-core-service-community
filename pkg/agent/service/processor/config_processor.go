@@ -268,18 +268,39 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 			return nil, fmt.Errorf("server environments must be a dictionary")
 		}
 
+		// EVO-2250 story 2.4 AC7: an env var whose value lives in the vault is
+		// referenced by name here (credential_refs: {ENV_NAME: credential id}).
+		// The runtime resolves it; this service only carries the reference.
+		credentialRefs, _ := serverMap["credential_refs"].(map[string]interface{})
+
 		mcpServerResponse := mcpServer.ToResponse()
 		for envKey := range mcpServerResponse.Environments {
-			if _, exists := environments[envKey]; !exists {
-				return nil, fmt.Errorf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
+			if _, exists := environments[envKey]; exists {
+				continue
 			}
+			// A required key satisfied by a vault reference is provided, just
+			// not inline: demanding a plaintext value here would make the vault
+			// unusable for exactly the secrets it exists to hold.
+			if _, referenced := credentialRefs[envKey]; referenced {
+				continue
+			}
+			return nil, fmt.Errorf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
 		}
 
-		processedServers = append(processedServers, map[string]interface{}{
+		processed := map[string]interface{}{
 			"id":           serverID,
 			"environments": serverMap["environments"],
 			"tools":        serverMap["tools"],
-		})
+		}
+
+		// Carried ONLY when present: this allowlist is what reaches the agent
+		// config, so a field left out here is silently dropped and the runtime
+		// resolution downstream never sees a reference to resolve.
+		if len(credentialRefs) > 0 {
+			processed["credential_refs"] = credentialRefs
+		}
+
+		processedServers = append(processedServers, processed)
 	}
 
 	return processedServers, nil
