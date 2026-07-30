@@ -163,8 +163,7 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 	// The community runtimecontext returns "" in standalone builds; we
 	// only attach the header when an enterprise scope has bound a real
 	// tenant id, satisfying the "no tenant → omit header" AC.
-	//
-	// The header name is the literal `X-Evo-Tenant-Id` — keep in sync
+	//	// The header name is the literal `X-Evo-Tenant-Id` — keep in sync
 	// with `tenant.HeaderTenantID` in evo-enterprise-licensing-go. We
 	// intentionally do NOT import the enterprise SDK constant here to
 	// preserve the community/enterprise decoupling that `runtimecontext`
@@ -177,9 +176,13 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 	tools, err := httpclient.DoPostJSON[model.CustomMcpServerToolsResponse](
 		ctx,
 		fmt.Sprintf("%s/api/%s/custom-mcp-servers/discover-tools", s.cfgAIProcessorService.URL, s.cfgAIProcessorService.Version),
+		// The vault references travel instead of the resolved values: the
+		// processor reads the secret itself, so a plaintext credential no
+		// longer crosses the service boundary in a JSON body .
 		map[string]interface{}{
-			"url":     request.URL,
-			"headers": stringutils.JSONToStringMap(request.Headers),
+			"url":             request.URL,
+			"headers":         stringutils.JSONToStringMap(request.Headers),
+			"credential_refs": stringutils.JSONToStringMap(request.CredentialRefs),
 		},
 		headers,
 		http.StatusOK,

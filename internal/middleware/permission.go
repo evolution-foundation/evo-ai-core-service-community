@@ -20,6 +20,15 @@ func InitializePermissionMiddleware(evoAuthBaseURL string) {
 	globalPermissionMiddleware = NewPermissionMiddleware(evoAuthBaseURL)
 }
 
+// SetGlobalPermissionMiddleware replaces the global middleware and returns a
+// restore func. Tests use it to reach the gates that live inside handlers,
+// which no route-level stub can exercise.
+func SetGlobalPermissionMiddleware(m PermissionMiddleware) func() {
+	previous := globalPermissionMiddleware
+	globalPermissionMiddleware = m
+	return func() { globalPermissionMiddleware = previous }
+}
+
 // GetGlobalPermissionMiddleware retorna o middleware global
 func GetGlobalPermissionMiddleware() PermissionMiddleware {
 	if globalPermissionMiddleware == nil {
@@ -33,6 +42,53 @@ type PermissionMiddleware interface {
 	RequirePermission(resource, action string) gin.HandlerFunc
 	CheckPermission(authToken, permissionKey string) (bool, error)
 	CheckPermissionWithType(authToken, permissionKey, tokenType string) (bool, error)
+	// HasPermission checks a permission from INSIDE a handler, for gates that
+	// depend on the request body and therefore cannot live on the route.
+	HasPermission(c *gin.Context, resource, action string) (bool, error)
+}
+
+// The permission governing writes at the INSTALLATION level: a credential every
+// account inherits.
+// // Checked inside the handler because the scope arrives in the body, which a
+// route-level middleware cannot see.
+const (
+	InstallationScopeResource = "installation_configs"
+	InstallationScopeAction   = "manage"
+)
+
+// RequireInstallationScope answers whether the caller may write at the
+// installation level, writing the 401/403 itself when it may not.
+// // Any failure to reach the auth service is a denial: a credential every account
+// inherits is not something to grant on a network error.
+func RequireInstallationScope(c *gin.Context) bool {
+	// No middleware means no way to authorize: deny rather than panic, and
+	// never let an uninitialized gate become an open door.
+	if globalPermissionMiddleware == nil {
+		response.ErrorResponse(c, "ERR_INTERNAL_SERVER", "Unable to validate user permissions", nil, http.StatusInternalServerError)
+		c.Abort()
+		return false
+	}
+
+	allowed, err := globalPermissionMiddleware.HasPermission(c, InstallationScopeResource, InstallationScopeAction)
+	if err != nil {
+		response.ErrorResponse(c, "ERR_INTERNAL_SERVER", "Unable to validate user permissions", nil, http.StatusInternalServerError)
+		c.Abort()
+		return false
+	}
+
+	if !allowed {
+		response.ErrorResponse(
+			c,
+			"ERR_FORBIDDEN",
+			"installation_configs.manage is required to write a credential at the installation scope",
+			nil,
+			http.StatusForbidden,
+		)
+		c.Abort()
+		return false
+	}
+
+	return true
 }
 
 type permissionMiddleware struct {
@@ -82,6 +138,21 @@ func (p *permissionMiddleware) RequirePermission(resource, action string) gin.Ha
 		fmt.Printf("Permission: Access granted for permission %s\n", permissionKey)
 		c.Next()
 	}
+}
+
+// HasPermission checks a permission for the caller of the current request.
+// Handlers use it for gates that depend on the request body, which a
+// route-level middleware cannot see.
+func (p *permissionMiddleware) HasPermission(c *gin.Context, resource, action string) (bool, error) {
+	permissionKey := fmt.Sprintf("%s.%s", resource, action)
+
+	tokenType, _ := contextutils.GetTokenType(c.Request.Context())
+	authToken, _ := contextutils.GetToken(c.Request.Context())
+	if authToken == "" {
+		return false, nil
+	}
+
+	return p.CheckPermissionWithType(authToken, permissionKey, tokenType)
 }
 
 // CheckPermission delegates to EvoAuthService for unified permission handling

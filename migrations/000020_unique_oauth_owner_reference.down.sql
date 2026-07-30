@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_evo_core_integration_credentials_owner_unique;
