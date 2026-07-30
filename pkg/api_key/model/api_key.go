@@ -18,10 +18,9 @@ type ApiKey struct {
 	Key      string    `json:"-" gorm:"not null; type:text"`
 	KeyHint  string    `json:"-" gorm:"not null; type:varchar(8);default:''"`
 	Scope    string    `json:"-" gorm:"not null; type:varchar(32);default:'account'"`
-	// The endpoint this credential talks to. NULL/empty means the provider
-	// default, which is what every credential registered before migration
-	// 000022 meant. An OpenAI-compatible provider is defined by the PAIR
-	// key+endpoint, so it lives here and not in installation config.
+	// The endpoint this credential talks to; NULL means the provider default.
+	// An OpenAI-compatible provider is the pair key+endpoint, so it lives here
+	// and not in installation config.
 	BaseURL *string `json:"-" gorm:"type:varchar(512)"`
 	// BaseURLSet distinguishes "the request did not mention base_url" from "the
 	// request cleared it": GORM skips nil in a struct Updates, so without this
@@ -71,9 +70,8 @@ type ApiKeyUpdateRequest struct {
 	// explicit "" clears it back to the provider default. A plain string could
 	// not tell the two apart, and GORM would skip the empty one anyway.
 	BaseURL *string `json:"base_url"`
-	// Pointer so "absent" and "false" are distinguishable: GORM's struct
-	// Updates skips zero values, so a plain bool could never turn a credential
-	// OFF, which made the settings screen's deactivation toggle a silent no-op.
+	// Pointer so "absent" and "false" are distinguishable: GORM's struct Updates
+	// skips zero values, so a plain bool could never turn a credential OFF.
 	IsActive *bool `json:"is_active"`
 }
 

@@ -2,20 +2,11 @@ package secretmerge
 
 import "testing"
 
-// The screens round-trip the object they received: they load fields from the
-// GET and send the whole thing back on save. Since the response stopped
-// carrying header values, a save arrives WITHOUT them, and a wholesale
-// overwrite would erase the stored secret.
-//
-// This is the same defect that bit story 2.3 on agent integrations, in a second
-// location: tools and MCP servers replace `headers` wholesale on update.
 // The round-trip a screen actually performs: RedactValues sends every NAME with
 // a blanked value, the screen edits an unrelated field and posts the object
-// back. The blanks must not erase the stored secrets.
-//
-// (This test used to feed an incoming map with the secret names ABSENT, which
-// described the older redaction that dropped the keys entirely. Now that names
-// always come back, absence means deletion, covered separately below.)
+// back. Those blanks must not erase the stored secrets, and tools and MCP
+// servers replace `headers` wholesale on update.
+// // Absence is a different case — it means deletion, covered separately below.
 func TestKeepMissingRestoresRedactedEntries(t *testing.T) {
 	stored := map[string]string{
 		"Authorization": "Bearer sk-secreto",
@@ -154,8 +145,7 @@ func TestRedactValuesHandlesNil(t *testing.T) {
 }
 
 // Removing a header must actually remove it.
-//
-// The redaction blanks VALUES but always sends the NAMES, so an absent key is
+// // The redaction blanks VALUES but always sends the NAMES, so an absent key is
 // unambiguous user intent: the row was deleted in the editor. Restoring every
 // absent key made deletion impossible — the header came back on reload, for
 // auth and non-auth names alike, with no UI affordance able to shed it.

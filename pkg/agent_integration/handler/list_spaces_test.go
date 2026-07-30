@@ -18,13 +18,10 @@ func (s *stubSpaceSource) ResolveNexusTarget(_ context.Context, agentID string) 
 	return s.baseURL, s.apiKey, s.err
 }
 
-// The security invariant of this endpoint, and the reason it is a resolver
-// rather than an extra request field: a VAULT-RESOLVED key may only ever be
-// sent to the base URL stored in the SAME integration row.
-//
-// Accepting a server-resolved credential together with a caller-supplied URL
-// would turn `ai_agents:update` into a credential-exfiltration primitive:
-// point the URL at your own host and harvest the stored Nexus key.
+// The security invariant, and why this is a resolver rather than an extra
+// request field: a vault-resolved key only ever goes to the base URL stored in
+// the SAME row. Server-resolved credential plus caller-supplied URL is
+// credential exfiltration.
 func TestSavedModeRejectsACallerSuppliedBaseURL(t *testing.T) {
 	req := listKnowledgeNexusSpacesRequest{
 		AgentID:      "11111111-1111-1111-1111-111111111111",

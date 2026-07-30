@@ -5,14 +5,12 @@ import (
 	"time"
 )
 
-// Connection states shown for an oauth row. They are DERIVED at display time
-// from the owner store, never stored: a copy goes stale on the first rotation
-// and would show "connected" for a dead integration.
-//
-// ⚠️ There is deliberately no "refresh failed" state. Nothing in the owner
-// store records a failed renewal: the failure only reaches the log, and at
-// least one provider returns the stale token on error. Emitting a guessed
-// failure badge would send someone reconnecting a healthy integration.
+// Connection states, derived at display time from the owner store and never
+// stored: a copy goes stale on the first rotation.
+// // ⚠️ No "refresh failed" state on purpose. Nothing records a failed renewal —
+// it only reaches the log, and at least one provider returns the stale token on
+// error — so the badge would be a guess that sends people reconnecting a
+// healthy integration.
 const (
 	ConnectionStatusConnected = "connected"
 	ConnectionStatusExpiring  = "expiring"
@@ -28,15 +26,11 @@ const expiringWindow = 24 * time.Hour
 // a string so a future story can point at another store without a migration.
 const OwnerStoreAgentIntegration = "agent_integration"
 
-// connectionProviders are the OAuth connections of an AGENT: things an agent
-// uses to act. Channel credentials (WhatsApp, Instagram, Gmail and Outlook of
-// an inbox) belong to the EvoHub domain and must never appear here, not even as
-// a reference (AC8).
-//
-// It is an allowlist, not "anything holding an access_token", because
-// `provider` is an unvalidated VARCHAR and the same table also holds satellite
-// rows (`<provider>_credentials`) that carry the token of a connection already
-// listed. Emitting those would double-list the same account.
+// connectionProviders are the OAuth connections of an AGENT. Channel
+// credentials belong to the EvoHub domain and never appear here.
+// // An allowlist rather than "anything with an access_token": `provider` is an
+// unvalidated VARCHAR, and the table also holds `<provider>_credentials`
+// satellite rows that would double-list an account already shown.
 var connectionProviders = map[string]bool{
 	"github":          true,
 	"notion":          true,

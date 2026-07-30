@@ -107,7 +107,7 @@ func (r *integrationCredentialRepository) Update(ctx context.Context, credential
 
 	// GORM's struct Updates skips zero values, so `false` could never travel
 	// through the struct: an explicit column update is what makes deactivation
-	// possible at all (adversarial review, 2026-07-29).
+	// possible at all .
 	if isActive != nil {
 		if err := r.db.WithContext(ctx).
 			Model(&model.IntegrationCredential{}).

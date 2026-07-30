@@ -12,13 +12,9 @@ import (
 
 // IntegrationCredential is the vault entry for a tool or integration secret:
 // the Dify key, the n8n basic auth, an MCP header, the Knowledge Nexus key.
-// It is deliberately NOT evo_core_api_keys, which holds model-provider keys as
-// a simple (provider, key) pair. Integration secrets are free-form and come in
-// kinds with different lifecycles, so they get their own registry.
-//
-// Every field carries `json:"-"`: the entity is written by GORM and read by the
-// service, never serialized to a client. Responses go through ToResponse, which
-// is what keeps the ciphertext from reaching a browser.
+// // Every field carries `json:"-"` so the entity can never be serialized to a
+// client; responses go through ToResponse, which is what keeps the ciphertext
+// out of a browser.
 type IntegrationCredential struct {
 	tenantfield.TenantField
 
@@ -154,7 +150,7 @@ type IntegrationCredentialUpdateRequest struct {
 	// Pointer on purpose: `false` is a meaningful value (deactivate), so a
 	// zero-value bool could not tell "turn it off" apart from "not sent".
 	// Without this field the screen's activate/deactivate toggle was a silent
-	// no-op (adversarial review, 2026-07-29).
+	// no-op .
 	IsActive *bool `json:"is_active"`
 }
 

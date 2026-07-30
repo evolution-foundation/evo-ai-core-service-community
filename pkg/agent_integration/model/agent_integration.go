@@ -40,14 +40,9 @@ type AgentIntegrationResponse struct {
 	UpdatedAt time.Time              `json:"updated_at"`
 }
 
-// sensitiveFieldNames are the config keys that carry a secret and must never
-// reach a client. The OAuth names were here from the start; the platform ones
-// (apiKey, basicAuth*, nexus_api_key) were NOT, so until story 2.3 the secret
-// of every external agent was echoed to anyone holding ai_agents:read.
-//
-// This list is also what MergePreservedSecrets protects on write: a field that
-// stops being returned must stop being overwritten by a save that never carried
-// it, or sanitizing the response would erase the stored secret.
+// sensitiveFieldNames are the config keys that must never reach a client.
+// // The same list drives MergePreservedSecrets: a field that stops being returned
+// must also stop being overwritten by a save that never carried it.
 var sensitiveFieldNames = []string{
 	"access_token",
 	"client_id",
@@ -81,14 +76,8 @@ func CredentialIDFrom(config map[string]interface{}) (string, bool) {
 }
 
 // MergePreservedSecrets carries stored secrets over into an incoming config
-// that omits them.
-//
-// The screens round-trip the object they received: they load fields from the
-// GET and send the whole thing back on save. Since sanitizeConfig stopped
-// returning the platform secrets, a save now arrives WITHOUT them, and a plain
-// overwrite (the upsert replaces `config` wholesale) would erase the stored
-// value. An absent key means "keep what is stored"; a present one wins, even
-// when blank, because sending an empty string is how a screen says "clear it".
+// that omits them. The upsert replaces `config` wholesale, and sanitizeConfig
+// means a save arrives without the secrets it never received.
 func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]interface{} {
 	merged := make(map[string]interface{}, len(incoming))
 	for key, value := range incoming {
@@ -112,18 +101,10 @@ func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]i
 			continue
 		}
 
-		// PRESENT AND BLANK also means "keep what is stored", the same rule
-		// secretmerge.KeepMissing follows for headers.
-		//
-		// The two used to disagree: this one treated a blank as "clear", which
-		// was only safe because the screen was fixed to omit the field (front
-		// commit 89f27c6). Any other client echoing `apiKey: ""` back — and the
-		// GET is sanitized, so every client gets a blank — erased the stored
-		// secret. One round-trip, one semantics (EVO-2250 review, MÉDIO 9).
-		//
-		// Clearing a secret is done by pointing the consumer at a vault
-		// credential (2.4) or by retiring the inline field (2.7), never by
-		// saving an empty string.
+		// Present and blank also means "keep", same rule secretmerge.KeepMissing
+		// follows: the GET is sanitized, so every client reads a blank back and
+		// "blank clears" would erase the secret on any round trip. Clearing is
+		// done by pointing at a vault credential or retiring the inline field.
 		if isBlankSecret(incomingValue) {
 			merged[field] = storedValue
 		}
@@ -132,9 +113,8 @@ func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]i
 	return merged
 }
 
-// isBlankSecret reports a value that carries no secret: the empty string, or
-// whitespace only. Non-strings are never blank — a caller sending a number or
-// an object is doing something deliberate.
+// isBlankSecret reports an empty or whitespace-only string. A non-string is
+// never blank: sending a number or an object is deliberate.
 func isBlankSecret(value interface{}) bool {
 	text, ok := value.(string)
 	if !ok {

@@ -16,14 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// EVO-2250 review, ALTO 5: the installation scope had no server-side gate. The
-// route middleware only demanded ai_api_keys.{create,update,delete}, and
-// NormalizeScope accepted scope:"installation" from anyone, so a plain account
-// admin could create or edit the credential every account inherits with a curl.
-// The browser check (AiCredentials.tsx) is not a gate.
-//
-// These tests exercise the PATH: they drive the real handler with a stubbed
-// permission middleware, so a gate that stopped being called fails them.
+// Writing at the installation scope requires installation_configs.manage, and
+// the browser check is not a gate.
+//// These drive the real handler with a stubbed permission middleware, so a gate
+// that stops being called fails them.
 
 // contextKey mirrors how EvoAuthMiddleware stores the token: plain string keys
 // read back by contextutils.
@@ -266,9 +262,7 @@ func TestInstallationScopeDeniedWhenPermissionCheckFails(t *testing.T) {
 	}
 }
 
-// EVO-2250 re-review, MÉDIO 2: an unreadable target used to WAIVE the gate.
-// `if stored, err := GetByID(...); err == nil && stored != nil` left
-// touchesInstallation false on error, so the write went through unauthorized.
+// A target the gate cannot read demands the privilege instead of waiving it.
 func TestUpdateDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
 	permissions := withPermission(t, false, nil)
 	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}

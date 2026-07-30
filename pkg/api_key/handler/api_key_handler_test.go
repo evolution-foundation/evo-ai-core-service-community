@@ -30,7 +30,7 @@ type stubService struct {
 	listRequest     model.ApiKeyListRequest
 }
 
-// GetByID answers for the scope gate (EVO-2250 review, ALTO 5), which reads
+// GetByID answers for the scope gate , which reads
 // the stored credential before allowing a write that touches the installation
 // default. Embedding the interface alone left it nil and panicked.
 func (s *stubService) GetByID(_ context.Context, _ uuid.UUID) (*model.ApiKey, error) {

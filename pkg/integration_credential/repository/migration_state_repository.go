@@ -9,11 +9,8 @@ import (
 )
 
 // migrationStateRepository counts what is left to migrate, per consumer.
-//
-// Each query is scoped to secrets that have NO vault reference replacing them:
-// that is what "still inline" means, and it is why an installation that
-// migrated reports zero even though the inline columns were deliberately not
-// deleted (story 2.6 keeps them for the fallback).
+// // "Still inline" means a secret with NO vault reference replacing it, which is
+// why a migrated installation reports zero even though the columns stay.
 type migrationStateRepository struct {
 	db *gorm.DB
 }
@@ -43,14 +40,10 @@ func (r *migrationStateRepository) PendingInlineSecrets(ctx context.Context, con
 	case model.ConsumerExternalAgents:
 		return r.pendingExternalAgents(ctx)
 	case model.ConsumerAgentBots:
-		// agent_bots lives in the CRM schema, which this service does not own:
-		// the CRM guard (Ai::IntegrationMigrationState) is the one that can
-		// actually answer for it. Reporting zero here would read as "retired"
-		// and let story 2.7 remove the bot's inline fallback on an installation
-		// that never migrated — the exact fail-open the guard forbids. A
-		// constant pending keeps the consumer NOT retired until a CRM-backed
-		// signal exists (adversarial review, 2026-07-29: the previous return 0
-		// contradicted this very comment).
+		// agent_bots lives in the CRM schema, and only the CRM guard can answer
+		// for it. Zero would read as "retired" and drop the bot's inline
+		// fallback on an installation that never migrated, so this stays pending
+		// until a CRM-backed signal exists.
 		return 1, nil
 	default:
 		return 0, nil

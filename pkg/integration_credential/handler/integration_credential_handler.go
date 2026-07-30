@@ -73,11 +73,9 @@ func NewIntegrationCredentialHandler(
 	}
 }
 
-// attachReferences fills `referenced_by` on every row of a page.
-//
-// A failure to aggregate does NOT fail the request: the credentials are the
-// point of the endpoint and the reference list is decoration. The field then
-// stays absent, and the screen falls back to not showing consumers.
+// attachReferences fills `referenced_by` on every row of a page. Aggregation
+// failure does not fail the request: the field stays absent and the screen
+// falls back to not showing consumers.
 func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []model.IntegrationCredentialResponse) []model.IntegrationCredentialResponse {
 	if h.references == nil || len(items) == 0 {
 		return items
@@ -97,10 +95,8 @@ func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []
 }
 
 // MigrationState reports which consumers may retire their inline secret field.
-//
-// A read failure answers "nothing retired" with a 200 rather than an error: the
-// screens treat a missing answer as not retired, so the inline field stays
-// editable. Failing the request would leave the form unable to decide at all.
+// A read failure answers "nothing retired" with a 200: failing the request
+// would leave the form unable to decide at all.
 func (h *integrationCredentialHandler) MigrationState(c *gin.Context) {
 	if h.migrationState == nil {
 		response.SuccessResponse(c, gin.H{"retired": map[string]bool{}}, "Migration state retrieved successfully", http.StatusOK)
@@ -288,7 +284,7 @@ func (h *integrationCredentialHandler) Create(c *gin.Context) {
 
 	// The installation scope is a separate privilege: this credential becomes
 	// the default every account inherits. Checked here and not on the route
-	// because the scope travels in the body (EVO-2250 review, ALTO 5).
+	// because the scope travels in the body .
 	scope := model.NormalizeScope(req.Scope)
 	if scope == model.ScopeInstallation && !middleware.RequireInstallationScope(c) {
 		return
@@ -434,7 +430,7 @@ func (h *integrationCredentialHandler) Update(c *gin.Context) {
 	}
 
 	// Promoting into the installation scope AND editing a credential already
-	// stored with it both need the privilege (EVO-2250 review, ALTO 5).
+	// stored with it both need the privilege .
 	if !h.authorizeScopeWrite(c, credential.Scope, id) {
 		return
 	}

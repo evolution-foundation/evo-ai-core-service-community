@@ -21,7 +21,7 @@ type CustomTool struct {
 	Headers     string    `json:"-" gorm:"not null; type:json"`
 	// Vault references: header name -> credential id. A MAP because one
 	// credential equals one secret, so a tool with two auth headers references
-	// two credentials (EVO-2250 story 2.4).
+	// two credentials .
 	CredentialRefs string         `json:"-" gorm:"not null; type:jsonb;default:'{}'"`
 	PathParams     string         `json:"-" gorm:"not null; type:json"`
 	QueryParams    string         `json:"-" gorm:"not null; type:json"`

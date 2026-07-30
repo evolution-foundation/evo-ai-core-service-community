@@ -11,8 +11,7 @@ import (
 
 // oauthConnectionRepository reads the OWNER store (evo_core_agent_integrations)
 // and persists the vault's reference rows.
-//
-// The read pulls metadata only: the id of the integration row, the agent it
+// // The read pulls metadata only: the id of the integration row, the agent it
 // belongs to, the provider and the expiry. `access_token` is deliberately NOT
 // selected, so a token cannot reach the vault even by accident.
 type oauthConnectionRepository struct {
@@ -73,18 +72,15 @@ func (r *oauthConnectionRepository) ListOAuthRows(ctx context.Context) ([]model.
 	return rows, err
 }
 
-// UpsertOAuthRow writes the reference by its natural key. A returning
-// connection reactivates its existing row instead of creating a second one.
-//
-// Two details proven against a real Postgres (adversarial review, 2026-07-29):
-//
-//   - `Omit("Value")` keeps the value column out of the INSERT. The struct
-//     field is a plain string, and GORM would otherwise send value = '', which
-//     violates the kind-content CHECK (an oauth row requires value IS NULL).
-//   - `TargetWhere` repeats the predicate of the PARTIAL unique index from
-//     migration 000020. Without it Postgres rejects the statement outright with
-//     "no unique or exclusion constraint matching the ON CONFLICT
-//     specification", so the sync would fail on every listing.
+// UpsertOAuthRow writes the reference by its natural key, so a returning
+// connection reactivates its row instead of creating a second one.
+// // Two things stubs do not catch:
+//   - `Omit("Value")` keeps the column out of the INSERT. The struct field is a
+//     plain string, so GORM would send value = ” and violate the kind-content
+//     CHECK, which requires NULL on an oauth row.
+//   - `TargetWhere` repeats the predicate of the partial unique index. Without
+//     it Postgres rejects the ON CONFLICT outright and the sync fails on every
+//     listing.
 func (r *oauthConnectionRepository) UpsertOAuthRow(ctx context.Context, row model.IntegrationCredential) error {
 	return r.db.WithContext(ctx).
 		Omit("Value").

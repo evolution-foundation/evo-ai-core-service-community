@@ -124,17 +124,9 @@ func TestMergePreservedSecretsAcceptsAnExplicitNewSecret(t *testing.T) {
 	}
 }
 
-// Sending an empty string is how a screen says "clear this": it is a present
-// key, so it must win over the stored value instead of being treated as absent.
-// EVO-2250 review, MÉDIO 9: this used to assert the opposite ("an explicit
-// blank clears"). That semantics disagreed with secretmerge.KeepMissing for the
-// very same round trip, and it was only safe because ONE client (the screen)
-// was fixed to omit the field. The GET is sanitized, so every client reads a
-// blank back — any other one echoing it erased the stored secret.
-//
-// One round trip, one rule: absent OR blank means "keep the stored secret".
-// Clearing happens by pointing at a vault credential (2.4) or retiring the
-// inline field (2.7).
+// One round trip, one rule: absent OR blank means "keep the stored secret",
+// matching secretmerge.KeepMissing. The GET is sanitized, so every client reads
+// a blank back and "blank clears" would erase the secret on any echo.
 func TestMergePreservedSecretsTreatsBlankAsKeep(t *testing.T) {
 	stored := map[string]interface{}{"apiKey": "app-dify-velha"}
 

@@ -1,11 +1,8 @@
 -- The integration credential vault: the secret a tool or integration needs to
--- act (Dify key, n8n basic auth, MCP header, Knowledge Nexus key). Deliberately
--- NOT evo_core_api_keys, which holds model-provider keys as a simple pair.
---
--- `kind` is the discriminator that keeps the vault from becoming a refresh
--- subsystem: a `static` row owns its (encrypted) value, while an `oauth` row
--- owns nothing and points at the store that already refreshes the token.
--- Story 2.5 opens the oauth path; 2.1 only stores static secrets.
+-- act (Dify key, n8n basic auth, MCP header, Knowledge Nexus key).
+---- `kind` keeps the vault from becoming a refresh subsystem: a `static` row owns
+-- its encrypted value, an `oauth` row owns nothing and points at the store that
+-- already refreshes the token.
 CREATE TABLE IF NOT EXISTS evo_core_integration_credentials (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
@@ -27,20 +24,17 @@ CREATE TABLE IF NOT EXISTS evo_core_integration_credentials (
         CHECK (value_format IN ('scalar', 'composite')),
     CONSTRAINT evo_core_integration_credentials_scope_check
         CHECK (scope IN ('installation', 'account')),
-    -- Coherence between kind and content, enforced by the database rather than
-    -- by convention: a convention breaks in a distracted pull request, and the
-    -- whole point of the oauth kind is that no token value ever lands here.
+    -- Enforced by the database, not by convention: the whole point of the oauth
+    -- kind is that no token value ever lands here.
     CONSTRAINT evo_core_integration_credentials_kind_content_check
         CHECK (
             (kind = 'static' AND value IS NOT NULL AND owner_store IS NULL AND owner_ref IS NULL)
             OR
             (kind = 'oauth' AND value IS NULL AND owner_store IS NOT NULL AND owner_ref IS NOT NULL)
         ),
-    -- Uniqueness is per scope, NEVER on name alone. The three sibling tables
-    -- (custom_tools, custom_mcp_servers, mcp_servers) unique on name alone, and
-    -- in the enterprise build two tenants naming a credential "Producao"
-    -- collide in the database. Adding tenant_id to this index is then a gem
-    -- migration, with no need to drop a live unique constraint.
+    -- Per scope, NEVER on name alone: the sibling tables do that, and in the
+    -- enterprise build two tenants naming a credential "Producao" collide.
+    -- Adding tenant_id here is then a gem migration, not a live constraint drop.
     CONSTRAINT evo_core_integration_credentials_scope_name_unique
         UNIQUE (scope, name)
 );

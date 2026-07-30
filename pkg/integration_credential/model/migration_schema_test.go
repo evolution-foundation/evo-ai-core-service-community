@@ -18,10 +18,9 @@ func readMigration(t *testing.T) string {
 	return string(content)
 }
 
-// The suite has no database, so uniqueness is proven against the DDL instead of
-// against Postgres. Story 2.1 requires UNIQUE (scope, name): the three sibling
-// core tables unique on name alone, which collides across tenants in the
-// enterprise build, and that is the mistake this table exists not to repeat.
+// No database in this suite, so uniqueness is proven against the DDL. The index
+// must be (scope, name): the sibling core tables unique on name alone, which
+// collides across tenants in the enterprise build.
 func TestUniqueIsScopedNotNameAlone(t *testing.T) {
 	ddl := readMigration(t)
 

@@ -29,15 +29,8 @@ func callWithParams(t *testing.T, method, target, body string, params gin.Params
 	return rec
 }
 
-// EVO-2250 review, ALTO 7: the screen rendered and SENT `base_url` since story
-// 1.1, but the field existed nowhere in the backend — not in the request, not
-// in the model, not in a migration. Every endpoint the user typed was silently
-// discarded, and with it went 1.5 AC1 ("OPENAI_API_URL preserved next to the
-// credential") and the 1.3 task "a resolved credential carrying its own URL
-// wins".
-//
-// These tests exercise the PATH from request to persisted struct: a field that
-// stops being carried fails them.
+// The endpoint the screen sends must survive the whole path, from request to
+// persisted struct: a field that stops being carried fails these.
 
 func TestCreatePersistsBaseURL(t *testing.T) {
 	withPermission(t, true, nil)

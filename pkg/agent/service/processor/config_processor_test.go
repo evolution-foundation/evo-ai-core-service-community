@@ -10,14 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// EVO-2250 story 2.4 AC7: an official MCP server takes the value of a secret
-// env var from the vault, referenced by name in `credential_refs`.
-//
-// This service is the narrow point of that path. `processMCPServers` rebuilds
-// each entry from an ALLOWLIST of keys, so a field missing from it is dropped
-// in silence — the processor's resolution downstream would then find no
-// reference to resolve and fall back to inline forever, which is exactly the
-// "written but never reached" defect class that failed this card's review.
+// An official MCP server takes a secret env var from the vault, referenced by
+// name in `credential_refs`.
+//// `processMCPServers` rebuilds each entry from an ALLOWLIST of keys, so a field
+// missing from it is dropped in silence and the runtime downstream finds no
+// reference to resolve.
 
 const serverID = "11111111-1111-1111-1111-111111111111"
 

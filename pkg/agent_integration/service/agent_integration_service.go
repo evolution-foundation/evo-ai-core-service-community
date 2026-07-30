@@ -85,13 +85,9 @@ func (s *agentIntegrationService) Upsert(ctx context.Context, agentID uuid.UUID,
 	return result.ToResponse(), nil
 }
 
-// validateCredentialReference refuses a vault reference the runtime could not
-// honour, so the failure lands on the person configuring the agent instead of
-// on the next conversation.
-//
-// An oauth credential is refused outright: its value column is NULL by database
-// CHECK, because the vault points at the store that owns the token rather than
-// copying it. Story 2.5 is what gives those rows meaning.
+// validateCredentialReference refuses a reference the runtime could not honour,
+// so the failure lands on whoever configures the agent, not on the next
+// conversation. An oauth credential is refused: its value is NULL by CHECK.
 func (s *agentIntegrationService) validateCredentialReference(ctx context.Context, config map[string]interface{}) error {
 	credentialID, present := model.CredentialIDFrom(config)
 	if !present {
@@ -118,12 +114,9 @@ func (s *agentIntegrationService) validateCredentialReference(ctx context.Contex
 	return nil
 }
 
-// mergeWithStoredSecrets keeps a secret the caller never sent.
-//
-// The upsert overwrites `config` wholesale, and since story 2.3 stopped
-// returning the platform secrets, the screens round-trip a config without them.
-// Without this merge, saving any unrelated field would erase the stored
-// credential.
+// mergeWithStoredSecrets keeps a secret the caller never sent: the upsert
+// overwrites `config` wholesale, and the sanitized GET means screens round-trip
+// a config without the platform secrets.
 func (s *agentIntegrationService) mergeWithStoredSecrets(ctx context.Context, agentID uuid.UUID, request model.AgentIntegrationRequest) (map[string]interface{}, error) {
 	stored, err := s.repository.GetByAgentAndProvider(ctx, agentID, request.Provider)
 	if err != nil || stored == nil {
@@ -176,12 +169,9 @@ func (s *agentIntegrationService) Delete(ctx context.Context, agentID uuid.UUID,
 
 // ResolveNexusTarget reads the base URL and the credential of a saved Knowledge
 // Nexus integration.
-//
-// ⚠️ Both values come from the SAME row on purpose. Resolving the credential
-// while letting the caller choose the destination would let anyone holding
-// `ai_agents:update` point the request at their own host and harvest the stored
-// key. The handler refuses that combination; this method never sees a
-// caller-supplied URL at all.
+// // ⚠️ Both come from the SAME row. Resolving the credential while letting the
+// caller pick the destination turns `ai_agents:update` into an exfiltration
+// primitive, so this method never sees a caller-supplied URL.
 func (s *agentIntegrationService) ResolveNexusTarget(ctx context.Context, agentID string) (string, string, error) {
 	id, err := uuid.Parse(agentID)
 	if err != nil {

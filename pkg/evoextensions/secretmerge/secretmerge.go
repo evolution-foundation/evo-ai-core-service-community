@@ -1,23 +1,14 @@
-// Package secretmerge keeps a stored secret from being erased by a save that
-// never carried it, and redacts secret values on the way out.
-//
-// The two belong together on purpose. The screens round-trip the object they
-// received: they load fields from the GET and send the whole thing back on
-// save. The moment a value stops being returned, a wholesale overwrite writes a
-// record without it and the stored secret is gone. Sanitizing a response and
-// merging on write are one change, not two.
-//
-// Story 2.3 hit this on agent integration configs; story 2.4 hits it again on
-// tool and MCP headers, which is why the logic lives here instead of being
-// copied a third time.
+// Package secretmerge redacts secret values on the way out and keeps a save
+// that never carried them from erasing what is stored.
+// // The two halves are one change: screens round-trip the object they received,
+// so the moment a value stops being returned, a wholesale overwrite drops it.
 package secretmerge
 
 import "strings"
 
-// safeHeaderNames are the headers whose VALUE may be returned to a client.
-// Everything else is redacted: the header map is free-form, so a name-based
-// denylist would miss `X-Tenant-Auth` and every other custom credential header.
-// An allowlist fails closed instead.
+// safeHeaderNames are the headers whose VALUE may be returned to a client. The
+// map is free-form, so a denylist would miss `X-Tenant-Auth` and every other
+// custom credential header; an allowlist fails closed.
 var safeHeaderNames = map[string]bool{
 	"accept":           true,
 	"accept-encoding":  true,
@@ -31,18 +22,11 @@ var safeHeaderNames = map[string]bool{
 
 // KeepMissing carries stored entries over into an incoming map that omits or
 // echoes them.
-//
-// An absent key means "keep what is stored". A present key wins — EXCEPT when
-// it arrives empty under a redacted name and a stored value exists. That empty
-// is our own redaction coming back: RedactValues keeps the NAME with a blank
-// value, and the screens round-trip the object they received, so every save of
-// a tool with a secret header used to arrive as `Authorization: ""` and erase
-// the stored secret (the 1.6 modal data-loss path, found again in the
-// adversarial review of 2026-07-29). "Blank means clear" cannot coexist with a
-// redaction that sends blanks back on every GET; clearing an inline secret now
-// happens by replacing it with a vault reference (2.4) or retiring it (2.7).
-// Safe-listed names still honour a blank: their values are never redacted, so
-// a blank there is genuine user intent.
+// // A blank under a redacted name is our own redaction echoing back, so it means
+// "keep", not "clear" — "blank clears" cannot coexist with a GET that returns
+// blanks. Safe-listed names are never redacted, so a blank there is real intent.
+// Clearing a secret happens by pointing at a vault credential or retiring the
+// inline field.
 func KeepMissing(incoming, stored map[string]string) map[string]string {
 	merged := make(map[string]string, len(incoming)+len(stored))
 	for key, value := range incoming {
@@ -55,10 +39,8 @@ func KeepMissing(incoming, stored map[string]string) map[string]string {
 		merged[key] = value
 	}
 
-	// An ABSENT key is deletion, not omission: RedactValues blanks values but
-	// always returns the names, so a screen that round-trips what it received
-	// sends every stored name back. Restoring absent keys here made a header
-	// impossible to delete — it simply reappeared on reload.
+	// An ABSENT key is deletion: RedactValues always returns the names, so a
+	// round-tripping screen sends back every one it still wants.
 	return merged
 }
 

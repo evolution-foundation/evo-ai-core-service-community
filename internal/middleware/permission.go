@@ -21,9 +21,8 @@ func InitializePermissionMiddleware(evoAuthBaseURL string) {
 }
 
 // SetGlobalPermissionMiddleware replaces the global middleware and returns a
-// function restoring the previous one. Tests use it to exercise the authorization
-// PATH — the gates that live inside handlers cannot be reached otherwise, and a
-// gate nobody calls is exactly the defect class this guards against.
+// restore func. Tests use it to reach the gates that live inside handlers,
+// which no route-level stub can exercise.
 func SetGlobalPermissionMiddleware(m PermissionMiddleware) func() {
 	previous := globalPermissionMiddleware
 	globalPermissionMiddleware = m
@@ -48,28 +47,22 @@ type PermissionMiddleware interface {
 	HasPermission(c *gin.Context, resource, action string) (bool, error)
 }
 
-// InstallationScopePermission is the permission that governs writing at the
-// INSTALLATION level: a credential that every account inherits.
-//
-// It has to be checked inside the handler, not on the route: the scope arrives
-// in the body, so a route-level middleware cannot tell an account write from an
-// installation write. It used to be enforced only in the browser, which meant a
-// plain account admin could create or edit the installation default with a
-// curl (EVO-2250 review, ALTO 5).
+// The permission governing writes at the INSTALLATION level: a credential every
+// account inherits.
+// // Checked inside the handler because the scope arrives in the body, which a
+// route-level middleware cannot see.
 const (
 	InstallationScopeResource = "installation_configs"
 	InstallationScopeAction   = "manage"
 )
 
 // RequireInstallationScope answers whether the caller may write at the
-// installation level, writing the 401/403 response itself when it may not.
-//
-// Returns true when the caller is allowed to proceed. Any failure to reach the
-// auth service is a denial, never a pass: a credential that every account
+// installation level, writing the 401/403 itself when it may not.
+// // Any failure to reach the auth service is a denial: a credential every account
 // inherits is not something to grant on a network error.
 func RequireInstallationScope(c *gin.Context) bool {
-	// No middleware means no way to authorize, which is a denial rather than a
-	// panic: an uninitialized gate must not become an open door.
+	// No middleware means no way to authorize: deny rather than panic, and
+	// never let an uninitialized gate become an open door.
 	if globalPermissionMiddleware == nil {
 		response.ErrorResponse(c, "ERR_INTERNAL_SERVER", "Unable to validate user permissions", nil, http.StatusInternalServerError)
 		c.Abort()

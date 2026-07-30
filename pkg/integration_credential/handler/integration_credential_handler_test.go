@@ -33,7 +33,7 @@ type stubService struct {
 	createCalls     int
 }
 
-// GetByID answers for the scope gate (EVO-2250 review, ALTO 5), which reads
+// GetByID answers for the scope gate , which reads
 // the stored credential before allowing a write that touches the installation
 // default. Embedding the interface alone left it nil and panicked.
 func (s *stubService) GetByID(_ context.Context, _ uuid.UUID) (*model.IntegrationCredential, error) {
@@ -301,7 +301,7 @@ func TestUpdateWithoutValueKeepsTheStoredOne(t *testing.T) {
 // The screen's activate/deactivate toggle travels as is_active on the update.
 // A pointer is what lets `false` through: with a plain bool the zero value is
 // indistinguishable from "not sent", and deactivation becomes a silent no-op
-// (the exact bug the adversarial review of 2026-07-29 found).
+// (the exact bug this guards).
 func TestUpdatePassesIsActiveThrough(t *testing.T) {
 	stub, handler := newTestHandler(t)
 
@@ -481,8 +481,7 @@ func TestMigrationStateFailureIsNeverRetired(t *testing.T) {
 
 // The literal route must be registered BEFORE /:id, or gin captures it as an id
 // and the endpoint answers "credential not found" instead of the state.
-//
-// Registration goes through the global permission middleware, which a unit test
+// // Registration goes through the global permission middleware, which a unit test
 // has no business booting, so the ordering is asserted on the source itself.
 func TestMigrationStateRouteIsRegisteredBeforeTheIdRoute(t *testing.T) {
 	source, err := os.ReadFile("integration_credential_handler.go")

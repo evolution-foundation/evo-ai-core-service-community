@@ -11,20 +11,12 @@ import (
 )
 
 // referenceRepository reads every consumer that points at a vault credential.
-//
-// ⚠️ BOUNDARY DECISION, and it reverses an earlier note in this same package.
-// The comment on `migrationStateRepository` said `agent_bots` lives in the CRM
-// schema and that this service does not read it. Here it does.
-//
-// The reason: `evo_community` is ONE database shared by both services, and the
-// alternatives are worse. Go calling Rails over HTTP reintroduces the bearer
-// problem that shaped story 1.2 (this query runs with no logged-in user), and
-// having Rails write an aggregation column would duplicate state that already
-// exists. What story 2.5 decided still holds for MIGRATION STATE, where the
-// answer depends on CRM business rules; this is a read of settled fact.
-//
-// Each store is read in one grouped query, never per credential: the screen
-// lists N credentials, and asking per credential would be 5N round trips.
+// // It reads `agent_bots` even though the CRM owns that table: the database is
+// shared, this query runs with no logged-in user (so HTTP to Rails hits the
+// bearer problem), and an aggregation column would duplicate existing state.
+// Migration state still belongs to the CRM — that answer depends on its rules,
+// this one is settled fact.
+// // One grouped query per store, never per credential: the screen lists N.
 type referenceRepository struct {
 	db *gorm.DB
 }

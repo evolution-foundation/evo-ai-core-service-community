@@ -29,17 +29,9 @@ type StoreCounts interface {
 }
 
 // MigrationState answers, per consumer, whether the inline fallback can be
-// retired.
-//
-// The semantics mirror Ai::MigrationState of story 1.6: retired means the
-// migration ran (a credential carries `imported_from`) OR there is nothing left
-// to migrate, which is the case for a fresh install that only ever used the
-// vault screen.
-//
-// ⚠️ A failure to read the state is NEVER retired. Story 2.7 removes the inline
-// fallback behind this guard, so a false "retired" on a broken install would
-// switch integrations off in silence, which is exactly the failure the guard
-// exists to prevent.
+// retired: the migration ran, or there was never anything inline to migrate.
+// // ⚠️ A failed read is NEVER retired. The fallback is removed behind this guard,
+// so a false "retired" switches integrations off in silence.
 type MigrationState struct {
 	counts StoreCounts
 }
@@ -54,9 +46,8 @@ func (s *MigrationState) Retired(ctx context.Context) (map[string]bool, error) {
 		retired[consumer] = false
 	}
 
-	// Read first: it is the call that fails loudly on a broken database, so a
-	// store that answers "nothing pending" because the query blew up never
-	// reaches the loop below.
+	// Fails loudly on a broken database, so a store cannot answer "nothing
+	// pending" because its query blew up.
 	if _, err := s.counts.ImportedCredentials(ctx); err != nil {
 		return retired, err
 	}
@@ -69,11 +60,8 @@ func (s *MigrationState) Retired(ctx context.Context) (map[string]bool, error) {
 			return zeroed(), err
 		}
 
-		// Per consumer: a store with nothing left inline is retired, whether
-		// because the migration imported it or because it never had a secret.
-		// Both conditions of the 1.6 guard collapse into this one check, and
-		// the imported count above is what proves a broken read is not mistaken
-		// for an empty store.
+		// Nothing left inline means retired, whether it was imported or never
+		// existed. The count above is what tells a broken read from an empty store.
 		retired[consumer] = pending == 0
 	}
 

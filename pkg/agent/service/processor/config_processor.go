@@ -268,9 +268,9 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 			return nil, fmt.Errorf("server environments must be a dictionary")
 		}
 
-		// EVO-2250 story 2.4 AC7: an env var whose value lives in the vault is
-		// referenced by name here (credential_refs: {ENV_NAME: credential id}).
-		// The runtime resolves it; this service only carries the reference.
+		// An env var whose value lives in the vault is referenced by name here
+		// (credential_refs: {ENV_NAME: credential id}). The runtime resolves it;
+		// this service only carries the reference.
 		credentialRefs, _ := serverMap["credential_refs"].(map[string]interface{})
 
 		mcpServerResponse := mcpServer.ToResponse()

@@ -13,9 +13,8 @@ import (
 )
 
 // The settings screen toggles a credential by sending {name, provider,
-// is_active}. Until this test, the field was not in the update request at all,
-// so the toggle was a silent no-op: the API answered 200 and the screen showed
-// success while the credential stayed exactly as it was.
+// is_active}. GORM skips zero values on struct Updates, so `false` only lands
+// if the field is a pointer — otherwise the toggle is a silent no-op.
 func TestUpdateAppliesIsActive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	stub := &stubService{}

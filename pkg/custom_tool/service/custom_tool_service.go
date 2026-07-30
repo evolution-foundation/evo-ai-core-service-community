@@ -23,8 +23,7 @@ import (
 )
 
 // SSRF defenses for runToolTest:
-//
-//  1. Scheme allowlist (http / https).
+// //  1. Scheme allowlist (http / https).
 //  2. Host validation pre-dial AND a custom DialContext that re-validates
 //     the resolved IP at connect time — prevents DNS rebinding where the
 //     name resolves to a public IP on first lookup and a private IP on
@@ -188,8 +187,7 @@ func toQueryValue(v interface{}) string {
 // endpoint, yielding the URL the tool actually calls. Without this the test ran a
 // bare endpoint — `/users/{user_id}` was requested literally and query params were
 // dropped, so the result did not reflect the configured tool.
-//
-// Safe by construction: the result is fed to runToolTest, which runs
+// // Safe by construction: the result is fed to runToolTest, which runs
 // validateEndpoint on the FINAL url — so a placeholder that expands into an
 // internal host is still caught by the SSRF gate.
 func resolveToolURL(endpoint string, pathParams map[string]string, queryParams map[string]interface{}) string {

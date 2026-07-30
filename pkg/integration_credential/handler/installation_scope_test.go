@@ -15,13 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// EVO-2250 review, ALTO 5: the vault had the same hole as the AI credentials
-// registry — `scope: "installation"` was accepted from any caller holding
-// ai_integration_credentials.create, and the installation_configs.manage check
-// existed only in the browser.
-//
-// These tests drive the real handler with a stubbed permission middleware, so a
-// gate that stopped being called fails them.
+// Same invariant as the AI credentials registry: `scope: "installation"` needs
+// installation_configs.manage, checked on the server.
+//// These drive the real handler with a stubbed permission middleware, so a gate
+// that stops being called fails them.
 
 type contextKey string
 
@@ -236,8 +233,7 @@ func TestInstallationScopeDeniedWhenPermissionCheckFails(t *testing.T) {
 	}
 }
 
-// EVO-2250 re-review, MÉDIO 2: an unreadable target used to WAIVE the gate here
-// too. Same defect, same fix as the api_key handler.
+// A target the gate cannot read demands the privilege, as in the api_key handler.
 func TestDeleteDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
 	withPermission(t, false, nil)
 	stub := &scopeStubService{getErr: errors.New("connection reset by peer")}

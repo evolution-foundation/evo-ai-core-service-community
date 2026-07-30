@@ -2,8 +2,7 @@
 -- plus the row in it. The sync (story 2.5) upserts on this key, so a connection
 -- that disappears and comes back reactivates its row instead of producing a
 -- second one.
---
--- Partial index: only oauth rows have an owner, and static rows keep both
+---- Partial index: only oauth rows have an owner, and static rows keep both
 -- columns NULL by the coherence CHECK of migration 000019.
 DO $$
 BEGIN

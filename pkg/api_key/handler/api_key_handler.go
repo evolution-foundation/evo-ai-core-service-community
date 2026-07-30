@@ -93,8 +93,7 @@ func (h *apiKeyHandler) authorizeScopeWrite(c *gin.Context, requestedScope strin
 	if !touchesInstallation {
 		// The stored scope decides when the request omits one, and it also
 		// covers demoting an installation credential to account level.
-		//
-		// A failed lookup demands the privilege rather than waiving it: the cost
+		//		// A failed lookup demands the privilege rather than waiving it: the cost
 		// is a 403 where a missing row would have answered 404.
 		stored, err := h.apiKeyService.GetByID(c.Request.Context(), id)
 		switch {
@@ -159,9 +158,8 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// The installation scope is a separate privilege: this credential becomes
-	// the default every account inherits. The check lives HERE and not on the
-	// route because the scope travels in the body (EVO-2250 review, ALTO 5).
+	// A separate privilege: this credential becomes the default every account
+	// inherits. Checked here, not on the route, because the scope is in the body.
 	scope := model.NormalizeScope(req.Scope)
 	if scope == model.ScopeInstallation && !middleware.RequireInstallationScope(c) {
 		return
@@ -302,11 +300,8 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 		apiKey.BaseURLSet = true
 	}
 
-	// Two ways to touch the installation default, and BOTH need the privilege:
-	// promoting an account credential into it, and editing one that already is
-	// (an omitted scope keeps the stored one, so reading the target is what
-	// closes that half). Same gate as Create, checked here because the scope
-	// lives in the body (EVO-2250 review, ALTO 5).
+	// Both ways of touching the installation default need the privilege:
+	// promoting a credential into it, and editing one that already is.
 	if !h.authorizeScopeWrite(c, apiKey.Scope, id) {
 		return
 	}

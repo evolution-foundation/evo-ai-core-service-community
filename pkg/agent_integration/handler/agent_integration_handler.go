@@ -202,14 +202,10 @@ func (r listKnowledgeNexusSpacesRequest) usesSavedCredential() bool {
 	return strings.TrimSpace(r.AgentID) != "" && strings.TrimSpace(r.NexusAPIKey) == ""
 }
 
-// validate enforces the security invariant of this endpoint.
-//
-// ⚠️ A VAULT-RESOLVED key may only ever be sent to the base URL stored in the
-// SAME integration row. Accepting a server-resolved credential together with a
-// caller-supplied URL would turn `ai_agents:update` into a credential
-// exfiltration primitive: point the URL at your own host and harvest the
-// stored Nexus key. The two modes are therefore mutually exclusive, and mixing
-// them is REJECTED rather than silently resolved one way or the other.
+// validate enforces the security invariant: a vault-resolved key only ever goes
+// to the base URL stored in the SAME row. Server-resolved credential plus
+// caller-supplied URL is credential exfiltration, so the two modes are mutually
+// exclusive and mixing them is rejected rather than silently resolved.
 func (r listKnowledgeNexusSpacesRequest) validate() error {
 	hasReference := strings.TrimSpace(r.AgentID) != ""
 	hasKey := strings.TrimSpace(r.NexusAPIKey) != ""

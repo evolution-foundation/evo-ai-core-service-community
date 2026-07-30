@@ -1,11 +1,8 @@
--- Vault references for tool and MCP secrets (EVO-2250, story 2.4).
---
--- It is a MAP (header or env var name -> credential id), not a scalar column:
--- one credential equals one secret, so a tool with two auth headers references
--- TWO credentials. A scalar column could not say WHICH header it replaces.
---
--- The inline `headers` stay untouched: they are the fallback until story 2.7
--- retires them, so nothing breaks before the 2.6 migration runs.
+-- Vault references for tool and MCP secrets.
+---- A MAP (header or env var name -> credential id), not a scalar: one credential
+-- is one secret, so a tool with two auth headers references two, and a scalar
+-- could not say which header it replaces.
+---- The inline `headers` stay as the fallback until retirement.
 ALTER TABLE evo_core_custom_tools
 ADD COLUMN IF NOT EXISTS credential_refs JSONB NOT NULL DEFAULT '{}';
 

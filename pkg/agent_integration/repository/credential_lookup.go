@@ -9,15 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// credentialLookup reads the integration credential vault
-// (evo_core_integration_credentials, story 2.1) just enough to validate a
-// reference: whether an ACTIVE credential with that id exists, and of which
-// kind.
-//
-// It queries the table directly rather than importing the credentials package,
-// so the two stores stay independent and only the id travels between them. The
-// query is scoped and parameterized, unlike the raw-connection pattern used by
-// some processor tools.
+// credentialLookup reads the vault just enough to validate a reference: whether
+// an ACTIVE credential with that id exists, and of which kind.
+// // It queries the table directly instead of importing the credentials package,
+// so the two stores stay independent and only the id travels between them.
 type credentialLookup struct {
 	db            *gorm.DB
 	encryptionKey string

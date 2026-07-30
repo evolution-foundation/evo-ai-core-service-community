@@ -21,16 +21,12 @@ type ReferenceStore interface {
 	DeactivateOAuthRow(ctx context.Context, ownerRef string) error
 }
 
-// OAuthSync reconciles the vault's oauth rows with the connections that exist
-// in the owner store.
-//
-// It runs on listing rather than on the OAuth callback on purpose: the callback
-// lives in the processor, and touching it would put this epic in the business
-// of owning connections. Reconciling on read means a connection made anywhere
-// shows up on the next listing, with no coupling at all.
-//
-// What it deliberately does NOT do: copy a token. The rows it writes carry
-// `owner_store` and `owner_ref` and nothing else that came from the connection.
+// OAuthSync reconciles the vault's oauth rows with the connections in the owner
+// store. It runs on listing, not on the OAuth callback: the callback lives in
+// the processor, and reconciling on read means a connection made anywhere shows
+// up next listing with no coupling.
+// // It never copies a token. The rows it writes carry `owner_store` and
+// `owner_ref` and nothing else from the connection.
 type OAuthSync struct {
 	reader ConnectionReader
 	store  ReferenceStore

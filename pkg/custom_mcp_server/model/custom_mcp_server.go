@@ -18,7 +18,7 @@ type CustomMcpServer struct {
 	Description string    `json:"-" gorm:"type:text"`
 	URL         string    `json:"-" gorm:"not null; type:varchar(1024)"`
 	Headers     string    `json:"-" gorm:"not null; type:json"`
-	// Vault references: header name -> credential id (EVO-2250 story 2.4).
+	// Vault references: header name -> credential id .
 	CredentialRefs string         `json:"-" gorm:"not null; type:jsonb;default:'{}'"`
 	Timeout        int            `json:"-" gorm:"not null; type:integer"`
 	RetryCount     int            `json:"-" gorm:"not null; type:integer"`
@@ -133,7 +133,7 @@ func (u *CustomMcpServer) ToResponse() *CustomMcpServerResponse {
 		Name:        u.Name,
 		Description: u.Description,
 		URL:         u.URL,
-		// Header VALUES are redacted, names survive (EVO-2250 story 2.4).
+		// Header VALUES are redacted, names survive .
 		Headers:        secretmerge.RedactValues(stringutils.JSONToStringMap(u.Headers)),
 		CredentialRefs: stringutils.JSONToStringMap(u.CredentialRefs),
 		Timeout:        u.Timeout,
