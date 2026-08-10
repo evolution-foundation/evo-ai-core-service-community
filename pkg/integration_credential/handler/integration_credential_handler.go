@@ -187,14 +187,14 @@ func (h *integrationCredentialHandler) RegisterRoutesMiddleware(router gin.IRout
 			h.GetByID)
 
 		credentials.POST("",
-			permissionMiddleware.RequirePermission("ai_integration_credentials", "create"),
+			permissionMiddleware.RequirePermission("ai_integration_credentials", "write"),
 			h.Create)
 		credentials.POST("/",
-			permissionMiddleware.RequirePermission("ai_integration_credentials", "create"),
+			permissionMiddleware.RequirePermission("ai_integration_credentials", "write"),
 			h.Create)
 
 		credentials.PUT("/:id",
-			permissionMiddleware.RequirePermission("ai_integration_credentials", "update"),
+			permissionMiddleware.RequirePermission("ai_integration_credentials", "write"),
 			h.Update)
 
 		credentials.DELETE("/:id",
