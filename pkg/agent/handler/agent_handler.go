@@ -9,6 +9,7 @@ import (
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/model"
 	"evo-ai-core-service/pkg/agent/service"
+	"evo-ai-core-service/pkg/evoextensions/agentquota"
 	folderShareService "evo-ai-core-service/pkg/folder_share/service"
 	"io"
 	"mime/multipart"
@@ -125,6 +126,16 @@ func (h *agentHandler) Create(c *gin.Context) {
 	var req *model.AgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ValidationErrorResponse(c, err)
+		return
+	}
+
+	// Enterprise builds enforce the tenant's plan `agents` limit here; the
+	// community build's Check is a no-op. This is the only seam every create
+	// path funnels through (the SPA posts to this core-service directly, and the
+	// CRM Rails proxy also lands here), so the quota cannot be enforced upstream.
+	if err := agentquota.Check(c.Request.Context()); err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
 		return
 	}
 
