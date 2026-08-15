@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -91,9 +92,9 @@ func MapDBError(err error, customMessages []CustomErrorMessage) error {
 		case "22001": // string truncation
 			return createError(ERR_VALUE_TOO_LONG, "Value too long", http.StatusBadRequest, err, customMessageMap)
 		case "42703": // undefined column
-			return createError(ERR_UNDEFINED_COLUMN, "Undefined column", http.StatusInternalServerError, err, customMessageMap)
+			return createSchemaError(ERR_UNDEFINED_COLUMN, "Undefined column", pgErr, err, customMessageMap)
 		case "42P01": // undefined table
-			return createError(ERR_UNDEFINED_TABLE, "Undefined table", http.StatusInternalServerError, err, customMessageMap)
+			return createSchemaError(ERR_UNDEFINED_TABLE, "Undefined table", pgErr, err, customMessageMap)
 		case "42601": // syntax error
 			return createError(ERR_SQL_SYNTAX_ERROR, "SQL syntax error", http.StatusInternalServerError, err, customMessageMap)
 		case "42804": // datatype mismatch
@@ -107,6 +108,20 @@ func MapDBError(err error, customMessages []CustomErrorMessage) error {
 
 	// generic error
 	return createError(ERR_UNEXPECTED_ERROR, "Unexpected error", http.StatusInternalServerError, err, customMessageMap)
+}
+
+// Schema errors (undefined column/table) mean the running binary is ahead of the
+// applied migrations. The Postgres message names only the identifier — e.g.
+// `column "base_url" of relation "evo_core_api_keys" does not exist` — never row
+// data, so it is safe to surface and it is what turns a blind "Undefined column"
+// into an actionable one. Logged as well: this was invisible in the pod log.
+func createSchemaError(code ErrorCode, defaultMessage string, pgErr *pgconn.PgError, err error, customMessages map[string]string) error {
+	log.Printf("postgres schema error %s (SQLSTATE %s): %s", code, pgErr.Code, pgErr.Message)
+	message := defaultMessage
+	if pgErr.Message != "" {
+		message = defaultMessage + ": " + pgErr.Message
+	}
+	return createError(code, message, http.StatusInternalServerError, err, customMessages)
 }
 
 func createError(code ErrorCode, defaultMessage string, httpCode int, err error, customMessages map[string]string) error {
