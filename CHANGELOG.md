@@ -9,7 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set `is_active = false` — indistinguishable from the deactivate toggle — so the encrypted key never left the database and the name stayed taken by the `(name, tenant_id)` unique. The delete is a hard delete (the model has no `deleted_at`); agents pointing at the key keep existing with `api_key_id = NULL` (`ON DELETE SET NULL`). Deleting a key that does not exist (or is already gone) answers **404** instead of a plain-error 500 — for a caller who passes the installation-scope gate; an account-level caller still meets that gate's fail-closed 403 when the target cannot be read. Rows already `is_active = false` are a mix of "deleted" and "deactivated" that no migration can tell apart; clean them up through the credentials screen.
+- **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set
+  `is_active = false` — indistinguishable from the deactivate toggle — so the
+  encrypted key never left the database and the name stayed taken by the
+  `(name, tenant_id)` unique. The delete is a hard delete (the model has no
+  `deleted_at`); agents pointing at the key keep existing with
+  `api_key_id = NULL` (`ON DELETE SET NULL`).
+  - **Contract change:** deleting a key that does not exist, or is already
+    gone, answers **404** — never the previous 200/204, and no longer the 500
+    a plain error produced. An account-level caller still meets the
+    installation-scope gate's fail-closed **403** when the target cannot be
+    read to decide its scope.
+  - Rows already `is_active = false` are a mix of "deleted" and "deactivated"
+    that no migration can tell apart; clean them up through the credentials
+    screen.
+- **`PUT /agents/apikeys/:id` answers 404 for an unknown key** instead of 500.
+  It replaced the mapped lookup error with a plain one, which the error handler
+  could only read as an internal error.
 
 ## [v1.0.0-rc6] - 2026-07-04
 

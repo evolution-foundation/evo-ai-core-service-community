@@ -62,12 +62,9 @@ func (s *scopeStubService) Update(_ context.Context, request *model.ApiKey, _ *b
 	return &stored, nil
 }
 
-func (s *scopeStubService) Delete(_ context.Context, _ uuid.UUID) (bool, error) {
+func (s *scopeStubService) Delete(_ context.Context, _ uuid.UUID) error {
 	s.deleteCalls++
-	if s.deleteErr != nil {
-		return false, s.deleteErr
-	}
-	return true, nil
+	return s.deleteErr
 }
 
 // permissionStub answers a fixed verdict and records what was asked.

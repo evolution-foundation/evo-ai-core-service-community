@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/pkg/api_key/model"
 	"evo-ai-core-service/pkg/api_key/repository"
@@ -16,7 +15,7 @@ type ApiKeyService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ApiKey, error)
 	List(ctx context.Context, request model.ApiKeyListRequest) (*model.ApiKeyListResponse, error)
 	Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error)
-	Delete(ctx context.Context, id uuid.UUID) (bool, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 type apiKeyService struct {
@@ -85,10 +84,8 @@ func (s *apiKeyService) List(ctx context.Context, request model.ApiKeyListReques
 }
 
 func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
-	_, err := s.GetByID(ctx, id)
-
-	if err != nil {
-		return nil, errors.New("API key not found")
+	if _, err := s.GetByID(ctx, id); err != nil {
+		return nil, err
 	}
 
 	apiKey, err := s.apiKeyRepository.Update(ctx, request, isActive, id)
@@ -100,22 +97,24 @@ func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, isAct
 	return apiKey, nil
 }
 
-func (s *apiKeyService) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
+// Delete reports only failure: a nil error means the row is gone. Anything
+// else — unknown id, or deleted between the read and the delete — is the
+// mapped 404, never a silent success.
+func (s *apiKeyService) Delete(ctx context.Context, id uuid.UUID) error {
 	// GetByID already maps a missing row to the 404 error; wrapping it in a
 	// plain error used to surface as 500.
 	if _, err := s.GetByID(ctx, id); err != nil {
-		return false, err
+		return err
 	}
 
 	deleted, err := s.apiKeyRepository.Delete(ctx, id)
 	if err != nil {
-		return false, errorsPostgres.MapDBError(err, model.APIKeyErrors)
+		return errorsPostgres.MapDBError(err, model.APIKeyErrors)
 	}
 
-	// Gone between the read and the delete: still a 404, never a silent 204.
 	if !deleted {
-		return false, errorsPostgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)
+		return errorsPostgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)
 	}
 
-	return true, nil
+	return nil
 }

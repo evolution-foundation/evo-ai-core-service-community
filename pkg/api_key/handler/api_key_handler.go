@@ -394,8 +394,7 @@ func (h *apiKeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	_, err = h.apiKeyService.Delete(c.Request.Context(), id)
-	if err != nil {
+	if err := h.apiKeyService.Delete(c.Request.Context(), id); err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
 		return

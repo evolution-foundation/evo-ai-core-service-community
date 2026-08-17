@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-type deleteStubRepo struct {
+type stubRepo struct {
 	stored    *model.ApiKey
 	getErr    error
 	deleted   bool
@@ -21,20 +21,20 @@ type deleteStubRepo struct {
 	calls     int
 }
 
-func (r *deleteStubRepo) Create(context.Context, model.ApiKey) (*model.ApiKey, error) {
+func (r *stubRepo) Create(context.Context, model.ApiKey) (*model.ApiKey, error) {
 	return nil, nil
 }
-func (r *deleteStubRepo) GetByID(context.Context, uuid.UUID) (*model.ApiKey, error) {
+func (r *stubRepo) GetByID(context.Context, uuid.UUID) (*model.ApiKey, error) {
 	return r.stored, r.getErr
 }
-func (r *deleteStubRepo) List(context.Context, model.ApiKeyListRequest) ([]*model.ApiKey, error) {
+func (r *stubRepo) List(context.Context, model.ApiKeyListRequest) ([]*model.ApiKey, error) {
 	return nil, nil
 }
-func (r *deleteStubRepo) Count(context.Context, string, string) (int64, error) { return 0, nil }
-func (r *deleteStubRepo) Update(context.Context, *model.ApiKey, *bool, uuid.UUID) (*model.ApiKey, error) {
+func (r *stubRepo) Count(context.Context, string, string) (int64, error) { return 0, nil }
+func (r *stubRepo) Update(context.Context, *model.ApiKey, *bool, uuid.UUID) (*model.ApiKey, error) {
 	return nil, nil
 }
-func (r *deleteStubRepo) Delete(context.Context, uuid.UUID) (bool, error) {
+func (r *stubRepo) Delete(context.Context, uuid.UUID) (bool, error) {
 	r.calls++
 	return r.deleted, r.deleteErr
 }
@@ -50,13 +50,12 @@ func notFoundStatus(t *testing.T, err error) {
 	}
 }
 
-func TestDeleteReturnsTrueWhenTheRowIsRemoved(t *testing.T) {
-	repo := &deleteStubRepo{stored: &model.ApiKey{}, deleted: true}
+func TestDeleteSucceedsWhenTheRowIsRemoved(t *testing.T) {
+	repo := &stubRepo{stored: &model.ApiKey{}, deleted: true}
 	svc := NewApiKeyService(repo)
 
-	deleted, err := svc.Delete(context.Background(), uuid.New())
-	if err != nil || !deleted {
-		t.Fatalf("expected a successful delete, got %v %v", deleted, err)
+	if err := svc.Delete(context.Background(), uuid.New()); err != nil {
+		t.Fatalf("expected a successful delete, got %v", err)
 	}
 	if repo.calls != 1 {
 		t.Fatalf("expected the repository delete once, got %d", repo.calls)
@@ -66,14 +65,10 @@ func TestDeleteReturnsTrueWhenTheRowIsRemoved(t *testing.T) {
 // A missing key used to come back as a plain error, which the handler turned
 // into a 500; the mapped 404 from the lookup is what must reach the client.
 func TestDeleteOfUnknownKeyIsNotFound(t *testing.T) {
-	repo := &deleteStubRepo{getErr: postgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)}
+	repo := &stubRepo{getErr: postgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)}
 	svc := NewApiKeyService(repo)
 
-	deleted, err := svc.Delete(context.Background(), uuid.New())
-	if deleted {
-		t.Fatal("must not report a delete that never happened")
-	}
-	notFoundStatus(t, err)
+	notFoundStatus(t, svc.Delete(context.Background(), uuid.New()))
 	if repo.calls != 0 {
 		t.Fatalf("must not attempt the delete of an unknown key, got %d calls", repo.calls)
 	}
@@ -82,12 +77,12 @@ func TestDeleteOfUnknownKeyIsNotFound(t *testing.T) {
 // A database failure on the delete itself must reach the client as the mapped
 // error, not as a bare success or a bare 500.
 func TestDeleteMapsARepositoryFailure(t *testing.T) {
-	repo := &deleteStubRepo{stored: &model.ApiKey{}, deleteErr: gorm.ErrInvalidData}
+	repo := &stubRepo{stored: &model.ApiKey{}, deleteErr: gorm.ErrInvalidData}
 	svc := NewApiKeyService(repo)
 
-	deleted, err := svc.Delete(context.Background(), uuid.New())
-	if deleted || err == nil {
-		t.Fatalf("expected a mapped failure, got %v %v", deleted, err)
+	err := svc.Delete(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("expected a mapped failure, got nil")
 	}
 	var dbErr *postgres.Error
 	if !errors.As(err, &dbErr) {
@@ -98,12 +93,8 @@ func TestDeleteMapsARepositoryFailure(t *testing.T) {
 // Deleted by someone else between the read and the delete: still a 404, never
 // a silent success.
 func TestDeleteRacingWithAnotherDeleteIsNotFound(t *testing.T) {
-	repo := &deleteStubRepo{stored: &model.ApiKey{}, deleted: false}
+	repo := &stubRepo{stored: &model.ApiKey{}, deleted: false}
 	svc := NewApiKeyService(repo)
 
-	deleted, err := svc.Delete(context.Background(), uuid.New())
-	if deleted {
-		t.Fatal("zero rows affected must not read as deleted")
-	}
-	notFoundStatus(t, err)
+	notFoundStatus(t, svc.Delete(context.Background(), uuid.New()))
 }
