@@ -8,6 +8,7 @@ import (
 	"evo-ai-core-service/pkg/api_key/repository"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type ApiKeyService interface {
@@ -100,17 +101,21 @@ func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, isAct
 }
 
 func (s *apiKeyService) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
-	_, err := s.GetByID(ctx, id)
-
-	if err != nil {
-		return false, errors.New("API key not found")
+	// GetByID already maps a missing row to the 404 error; wrapping it in a
+	// plain error used to surface as 500.
+	if _, err := s.GetByID(ctx, id); err != nil {
+		return false, err
 	}
 
 	deleted, err := s.apiKeyRepository.Delete(ctx, id)
-
 	if err != nil {
 		return false, errorsPostgres.MapDBError(err, model.APIKeyErrors)
 	}
 
-	return deleted, nil
+	// Gone between the read and the delete: still a 404, never a silent 204.
+	if !deleted {
+		return false, errorsPostgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)
+	}
+
+	return true, nil
 }
