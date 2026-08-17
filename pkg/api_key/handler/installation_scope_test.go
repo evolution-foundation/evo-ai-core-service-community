@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/middleware"
 	"evo-ai-core-service/pkg/api_key/model"
 	"evo-ai-core-service/pkg/api_key/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Writing at the installation scope requires installation_configs.manage, and
@@ -29,6 +31,7 @@ type scopeStubService struct {
 	service.ApiKeyService
 	stored      *model.ApiKey
 	getErr      error
+	deleteErr   error
 	createCalls int
 	updateCalls int
 	deleteCalls int
@@ -61,6 +64,9 @@ func (s *scopeStubService) Update(_ context.Context, request *model.ApiKey, _ *b
 
 func (s *scopeStubService) Delete(_ context.Context, _ uuid.UUID) (bool, error) {
 	s.deleteCalls++
+	if s.deleteErr != nil {
+		return false, s.deleteErr
+	}
 	return true, nil
 }
 
@@ -297,6 +303,24 @@ func TestDeleteDemandsTheGateWhenTheTargetCannotBeRead(t *testing.T) {
 	}
 	if stub.deleteCalls != 0 {
 		t.Error("the credential was deleted while the gate could not read it")
+	}
+}
+
+// A key that is gone (or never existed) is a 404 for a caller who passes the
+// gate — never a 200/204 (CRM-186). Account-level callers still meet the
+// fail-closed 403 above, since the target cannot be read to decide its scope.
+func TestDeleteOfMissingKeyIsNotFoundForPrivilegedCaller(t *testing.T) {
+	withPermission(t, true, nil)
+	notFound := postgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)
+	stub := &scopeStubService{getErr: notFound, deleteErr: notFound}
+	handler := newScopeHandler(stub)
+
+	c, recorder := requestWithToken(http.MethodDelete, "")
+	c.Params = gin.Params{{Key: "id", Value: uuid.New().String()}}
+	handler.Delete(c)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", recorder.Code, recorder.Body.String())
 	}
 }
 
