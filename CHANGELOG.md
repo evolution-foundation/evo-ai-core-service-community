@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set `is_active = false` — indistinguishable from the deactivate toggle — so the encrypted key never left the database and the name stayed taken by the `(name, tenant_id)` unique. The delete is a hard delete (the model has no `deleted_at`); agents pointing at the key keep existing with `api_key_id = NULL` (`ON DELETE SET NULL`). Deleting a key that does not exist (or is already gone) answers **404** instead of a plain-error 500 — for a caller who passes the installation-scope gate; an account-level caller still meets that gate's fail-closed 403 when the target cannot be read. Rows already `is_active = false` are a mix of "deleted" and "deactivated" that no migration can tell apart; clean them up through the credentials screen.
+
 ## [v1.0.0-rc6] - 2026-07-04
 
 Feature release — server-side advanced filtering across the list endpoints, a rebuilt Custom Tool test endpoint, a standalone community image build, and enterprise multi-tenancy extension points that remain no-ops in the community build.

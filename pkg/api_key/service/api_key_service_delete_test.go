@@ -79,6 +79,22 @@ func TestDeleteOfUnknownKeyIsNotFound(t *testing.T) {
 	}
 }
 
+// A database failure on the delete itself must reach the client as the mapped
+// error, not as a bare success or a bare 500.
+func TestDeleteMapsARepositoryFailure(t *testing.T) {
+	repo := &deleteStubRepo{stored: &model.ApiKey{}, deleteErr: gorm.ErrInvalidData}
+	svc := NewApiKeyService(repo)
+
+	deleted, err := svc.Delete(context.Background(), uuid.New())
+	if deleted || err == nil {
+		t.Fatalf("expected a mapped failure, got %v %v", deleted, err)
+	}
+	var dbErr *postgres.Error
+	if !errors.As(err, &dbErr) {
+		t.Fatalf("expected the repository error mapped, got %T: %v", err, err)
+	}
+}
+
 // Deleted by someone else between the read and the delete: still a 404, never
 // a silent success.
 func TestDeleteRacingWithAnotherDeleteIsNotFound(t *testing.T) {
