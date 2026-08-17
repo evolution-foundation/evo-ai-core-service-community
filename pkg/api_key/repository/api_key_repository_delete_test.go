@@ -27,21 +27,41 @@ func dryRunDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// Captures every statement the repository sends through GORM, whichever
+// operation it is: an UPDATE is_active would be recorded just the same, so
+// the assertion below fails against the old soft delete.
+func captureStatements(t *testing.T, db *gorm.DB) *[]string {
+	t.Helper()
+	var seen []string
+	record := func(tx *gorm.DB) { seen = append(seen, tx.Statement.SQL.String()) }
+	if err := db.Callback().Delete().After("gorm:delete").Register("crm186_capture_delete", record); err != nil {
+		t.Fatalf("register delete callback: %v", err)
+	}
+	if err := db.Callback().Update().After("gorm:update").Register("crm186_capture_update", record); err != nil {
+		t.Fatalf("register update callback: %v", err)
+	}
+	return &seen
+}
+
 func TestDeleteRemovesTheRow(t *testing.T) {
 	db := dryRunDB(t)
+	seen := captureStatements(t, db)
+	repo := &apiKeyRepository{db: db}
 	id := uuid.New()
 
-	stmt := db.WithContext(context.Background()).Where("id = ?", id).Delete(&model.ApiKey{}).Statement
+	if _, err := repo.Delete(context.Background(), id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
 
-	sql := stmt.SQL.String()
-	if !strings.HasPrefix(sql, `DELETE FROM "evo_core_api_keys"`) {
-		t.Fatalf("expected a hard DELETE, got %q", sql)
+	if len(*seen) != 1 {
+		t.Fatalf("expected exactly one statement, got %v", *seen)
+	}
+	sql := (*seen)[0]
+	if !strings.HasPrefix(sql, `DELETE FROM "evo_core_api_keys" WHERE id = `) {
+		t.Fatalf("expected a hard DELETE by id, got %q", sql)
 	}
 	if strings.Contains(strings.ToLower(sql), "is_active") {
 		t.Fatalf("delete must not be a soft toggle, got %q", sql)
-	}
-	if len(stmt.Vars) != 1 || stmt.Vars[0] != id {
-		t.Fatalf("expected the id as the only bind, got %v", stmt.Vars)
 	}
 }
 
