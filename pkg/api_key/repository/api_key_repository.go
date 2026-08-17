@@ -136,10 +136,15 @@ func (r *apiKeyRepository) Update(ctx context.Context, apiKey *model.ApiKey, isA
 	return &updated, nil
 }
 
+// Delete removes the row. The model carries no DeletedAt, so this is a hard
+// delete: the encrypted key leaves the database and the name is free again.
+// Agents pointing at it keep existing (evo_core_agents.api_key_id is
+// ON DELETE SET NULL). Returns false when no row matched.
 func (r *apiKeyRepository) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
-	if err := r.db.WithContext(ctx).Model(&model.ApiKey{}).Where("id = ?", id).Update("is_active", false).Error; err != nil {
-		return false, err
+	result := r.db.WithContext(ctx).Where("id = ?", id).Delete(&model.ApiKey{})
+	if result.Error != nil {
+		return false, result.Error
 	}
 
-	return true, nil
+	return result.RowsAffected > 0, nil
 }
