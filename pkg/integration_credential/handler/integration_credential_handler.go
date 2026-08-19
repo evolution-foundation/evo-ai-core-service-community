@@ -482,7 +482,7 @@ func (h *integrationCredentialHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.credentialService.Delete(c.Request.Context(), id); err != nil {
+	if err := h.credentialService.Delete(c.Request.Context(), id); err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
 		return

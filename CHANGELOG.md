@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`DELETE /integration-credentials/:id` now removes the row** (CRM-191). It
+  used to set `is_active = false` like the deactivate toggle, so the encrypted
+  value never left the database and its `(scope, name)` / `(owner_store,
+  owner_ref)` stayed taken. The delete is a hard delete (the model has no
+  `deleted_at`).
+  - **Consumer guard:** unlike `api_key`, no FK protects this table — a
+    credential's id can sit inside a jsonb column on custom tools, MCP
+    servers, agents, agent integrations, or bots. Deleting one still in use
+    now answers **409**, naming the consumers, instead of leaving a dangling
+    reference that only fails the next time the tool runs.
+  - **Contract change:** deleting a credential that does not exist, or is
+    already gone, answers **404** — never the previous 200/204, and no longer
+    the 500 a plain error produced.
 - **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set
   `is_active = false` — indistinguishable from the deactivate toggle — so the
   encrypted key never left the database and the name stayed taken by the
