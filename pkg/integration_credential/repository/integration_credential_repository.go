@@ -125,9 +125,6 @@ func (r *integrationCredentialRepository) Update(ctx context.Context, credential
 	return &updated, nil
 }
 
-// Delete removes the row. The model carries no DeletedAt, so this is a hard
-// delete: the encrypted value leaves the database and (scope, name) /
-// (owner_store, owner_ref) are free again. Returns false when no row matched.
 func (r *integrationCredentialRepository) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
 	result := r.db.WithContext(ctx).Where("id = ?", id).Delete(&model.IntegrationCredential{})
 	if result.Error != nil {

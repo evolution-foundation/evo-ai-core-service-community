@@ -16,8 +16,6 @@ type Module struct {
 
 func New(db *gorm.DB, encryptionKey string) *Module {
 	r := repository.NewIntegrationCredentialRepository(db)
-	// AC10 of story 2.4: who uses each credential, aggregated per page. Delete
-	// reuses the same index as its consumer check.
 	references := service.NewReferenceIndex(repository.NewReferenceRepository(db))
 	s := service.NewIntegrationCredentialService(r, references)
 	// The oauth sync reconciles reference rows on listing: the OAuth callbacks

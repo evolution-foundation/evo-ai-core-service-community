@@ -43,8 +43,6 @@ func (r *stubCredentialRepo) Delete(context.Context, uuid.UUID) (bool, error) {
 	return r.deleted, r.deleteErr
 }
 
-// referencedStub reports consumers for one specific credential id, mirroring
-// how the real index keys by id.
 type referencedStub struct {
 	id     uuid.UUID
 	labels []string
@@ -87,9 +85,6 @@ func TestDeleteSucceedsWhenTheRowIsRemoved(t *testing.T) {
 	}
 }
 
-// A missing credential used to come back as a plain error, which the handler
-// turned into a 500; the mapped 404 from the lookup is what must reach the
-// client.
 func TestDeleteOfUnknownCredentialIsNotFound(t *testing.T) {
 	repo := &stubCredentialRepo{getErr: postgres.MapDBError(gorm.ErrRecordNotFound, model.IntegrationCredentialErrors)}
 	refs := &referencedStub{}
@@ -104,8 +99,6 @@ func TestDeleteOfUnknownCredentialIsNotFound(t *testing.T) {
 	}
 }
 
-// A database failure on the delete itself must reach the client as the mapped
-// error, not as a bare success or a bare 500.
 func TestDeleteMapsARepositoryFailure(t *testing.T) {
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleteErr: gorm.ErrInvalidData}
 	refs := &referencedStub{}
@@ -121,8 +114,6 @@ func TestDeleteMapsARepositoryFailure(t *testing.T) {
 	}
 }
 
-// Deleted by someone else between the read and the delete: still a 404, never
-// a silent success.
 func TestDeleteRacingWithAnotherDeleteIsNotFound(t *testing.T) {
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleted: false}
 	refs := &referencedStub{}
@@ -131,8 +122,6 @@ func TestDeleteRacingWithAnotherDeleteIsNotFound(t *testing.T) {
 	notFoundStatus(t, svc.Delete(context.Background(), uuid.New()))
 }
 
-// No FK backs this table: a consumer holds the id in a jsonb column, so the
-// delete must refuse with 409 instead of leaving a dangling reference.
 func TestDeleteRefusesWhileACredentialHasConsumers(t *testing.T) {
 	id := uuid.New()
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleted: true}
@@ -161,8 +150,6 @@ func TestDeleteRefusesWhileACredentialHasConsumers(t *testing.T) {
 	}
 }
 
-// A credential with no consumers deletes normally: the check must not block
-// the common case.
 func TestDeleteProceedsWhenNoConsumersHoldTheCredential(t *testing.T) {
 	id := uuid.New()
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleted: true}

@@ -65,8 +65,7 @@ func TestDeleteRemovesTheRow(t *testing.T) {
 	}
 }
 
-// The model has no DeletedAt: GORM would otherwise turn Delete into an UPDATE
-// deleted_at, which is the soft delete this card removes.
+// GORM turns Delete into an UPDATE deleted_at when the model has that field.
 func TestIntegrationCredentialModelHasNoSoftDeleteColumn(t *testing.T) {
 	stmt := &gorm.Statement{DB: dryRunDB(t)}
 	if err := stmt.Parse(&model.IntegrationCredential{}); err != nil {

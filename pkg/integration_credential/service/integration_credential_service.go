@@ -24,8 +24,6 @@ type IntegrationCredentialService interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-// ReferenceIndexer reports which consumers point at each vault credential, so
-// Delete can refuse to remove one still in use.
 type ReferenceIndexer interface {
 	Build(ctx context.Context) (ReferenceIndex, error)
 }
@@ -100,9 +98,6 @@ func (s *integrationCredentialService) Update(ctx context.Context, request *mode
 	return credential, nil
 }
 
-// Delete reports only failure: a nil error means the row is gone. Anything
-// else — unknown id, a live consumer, or a race with another delete — is a
-// mapped error, never a silent success.
 func (s *integrationCredentialService) Delete(ctx context.Context, id uuid.UUID) error {
 	// GetByID already maps a missing row to the 404 error; wrapping it in a
 	// plain error used to surface as 500.
@@ -126,10 +121,8 @@ func (s *integrationCredentialService) Delete(ctx context.Context, id uuid.UUID)
 	return nil
 }
 
-// refuseIfReferenced blocks the delete while a consumer still points at the
-// credential: no FK backs this table, so a hard delete would leave the jsonb
-// reference dangling instead of nulling it, and the tool/MCP would only fail
-// the next time it tries to run.
+// No FK backs this table, unlike api_key: a hard delete would otherwise leave
+// a dangling jsonb reference instead of nulling it.
 func (s *integrationCredentialService) refuseIfReferenced(ctx context.Context, id uuid.UUID) error {
 	index, err := s.references.Build(ctx)
 	if err != nil {
