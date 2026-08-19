@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -482,11 +483,22 @@ func (h *integrationCredentialHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.credentialService.Delete(c.Request.Context(), id); err != nil {
+	if err := h.credentialService.Delete(c.Request.Context(), id); err != nil {
 		code, message, httpCode := errors.HandleError(err)
-		response.ErrorResponse(c, code, message, nil, httpCode)
+		// The 409 names its consumers in details; HandleError only carries
+		// code/message/status, so they would be dropped on the way out.
+		response.ErrorResponse(c, code, message, errorDetails(err), httpCode)
 		return
 	}
 
 	response.SuccessResponse(c, nil, "Integration credential deleted successfully", http.StatusNoContent)
+}
+
+// errorDetails surfaces the structured payload an ApiError carries, if any.
+func errorDetails(err error) interface{} {
+	var apiErr *errors.ApiError
+	if stderrors.As(err, &apiErr) {
+		return apiErr.Details
+	}
+	return nil
 }

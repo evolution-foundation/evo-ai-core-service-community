@@ -55,9 +55,9 @@ func (s *scopeStubService) Update(ctx context.Context, request *model.Integratio
 	return s.stubService.Update(ctx, request, isActive, id)
 }
 
-func (s *scopeStubService) Delete(_ context.Context, _ uuid.UUID) (bool, error) {
+func (s *scopeStubService) Delete(_ context.Context, _ uuid.UUID) error {
 	s.deleteCalls++
-	return true, nil
+	return nil
 }
 
 type permissionStub struct {

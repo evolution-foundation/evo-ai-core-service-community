@@ -9,10 +9,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// ReferenceReader reads, in ONE pass, every consumer that points at a vault
-// credential. Per-credential would be 5N round trips for a page of N.
+// ReferenceReader reads the consumers that point at a vault credential, either
+// in ONE pass for a whole page (per-credential would be 5N round trips for a
+// page of N) or narrowed to a single credential, which is what the delete guard
+// asks and where the full sweep would materialize every consumer in the
+// database to answer about one row.
 type ReferenceReader interface {
 	ReferencesByCredential(ctx context.Context) ([]model.CredentialReference, error)
+	ReferencesForCredential(ctx context.Context, id uuid.UUID) ([]model.CredentialReference, error)
 }
 
 // ReferenceIndex answers "who uses this credential" for the whole page.
@@ -58,4 +62,22 @@ func (b *referenceIndexBuilder) Build(ctx context.Context) (ReferenceIndex, erro
 	}
 
 	return index, nil
+}
+
+// ConsumersOf names who holds ONE credential, narrowed in the database. It
+// propagates a read failure instead of degrading: the caller is the delete
+// guard, and an empty answer there means "nobody uses it, go ahead".
+func (b *referenceIndexBuilder) ConsumersOf(ctx context.Context, id uuid.UUID) ([]string, error) {
+	rows, err := b.reader.ReferencesForCredential(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	labels := make([]string, 0, len(rows))
+	for _, row := range rows {
+		labels = append(labels, row.Label)
+	}
+	sort.Strings(labels)
+
+	return labels, nil
 }

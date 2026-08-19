@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"evo-ai-core-service/pkg/integration_credential/model"
 
 	"github.com/google/uuid"
 )
+
+var errNotReadable = errors.New("store not readable")
 
 // stubReferenceReader stands in for the five stores.
 type stubReferenceReader struct {
@@ -19,6 +22,21 @@ type stubReferenceReader struct {
 func (s *stubReferenceReader) ReferencesByCredential(_ context.Context) ([]model.CredentialReference, error) {
 	s.calls++
 	return s.rows, s.err
+}
+
+func (s *stubReferenceReader) ReferencesForCredential(_ context.Context, id uuid.UUID) ([]model.CredentialReference, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	matching := make([]model.CredentialReference, 0, len(s.rows))
+	for _, row := range s.rows {
+		if row.CredentialID == id {
+			matching = append(matching, row)
+		}
+	}
+	return matching, nil
 }
 
 func TestReferencesGroupsEveryConsumerUnderItsCredential(t *testing.T) {
@@ -105,5 +123,43 @@ func TestReferenceLabelsAreStableForRendering(t *testing.T) {
 	labels := index.For(id)
 	if len(labels) != 2 || labels[0] != "alfa" || labels[1] != "zeta" {
 		t.Errorf("labels are not sorted for stable rendering: %v", labels)
+	}
+}
+
+// The delete guard asks about ONE credential, so the narrowing happens in the
+// store: building the whole index to read one entry would sweep every consumer
+// in the database to answer about a single row.
+func TestConsumersOfNarrowsToTheCredentialAsked(t *testing.T) {
+	wanted := uuid.New()
+	other := uuid.New()
+
+	reader := &stubReferenceReader{rows: []model.CredentialReference{
+		{CredentialID: wanted, Label: "MCP Zendesk [token]"},
+		{CredentialID: wanted, Label: "Agente Cobrança [api_key]"},
+		{CredentialID: other, Label: "Bot de canal (whatsapp)"},
+	}}
+
+	consumers, err := NewReferenceIndex(reader).ConsumersOf(context.Background(), wanted)
+	if err != nil {
+		t.Fatalf("ConsumersOf: %v", err)
+	}
+
+	want := []string{"Agente Cobrança [api_key]", "MCP Zendesk [token]"}
+	if len(consumers) != len(want) {
+		t.Fatalf("consumers = %v, want %v", consumers, want)
+	}
+	for i := range want {
+		if consumers[i] != want[i] {
+			t.Errorf("consumers[%d] = %q, want %q", i, consumers[i], want[i])
+		}
+	}
+}
+
+// The listing degrades to an empty index on a read failure; the guard must not.
+func TestConsumersOfPropagatesAReadFailure(t *testing.T) {
+	reader := &stubReferenceReader{err: errNotReadable}
+
+	if _, err := NewReferenceIndex(reader).ConsumersOf(context.Background(), uuid.New()); err == nil {
+		t.Fatal("expected the read failure to propagate, got nil")
 	}
 }

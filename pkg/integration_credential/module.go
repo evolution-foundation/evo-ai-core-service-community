@@ -16,13 +16,14 @@ type Module struct {
 
 func New(db *gorm.DB, encryptionKey string) *Module {
 	r := repository.NewIntegrationCredentialRepository(db)
-	s := service.NewIntegrationCredentialService(r)
+	references := service.NewReferenceIndex(repository.NewReferenceRepository(db))
 	// The oauth sync reconciles reference rows on listing: the OAuth callbacks
 	// live in the processor and stay untouched.
 	oauthRepo := repository.NewOAuthConnectionRepository(db)
+	// The delete guard reads the same connections the sync does, so a row the
+	// sync would recreate cannot be deleted in the first place.
+	s := service.NewIntegrationCredentialService(r, references, oauthRepo)
 	migrationState := service.NewMigrationState(repository.NewMigrationStateRepository(db))
-	// AC10 of story 2.4: who uses each credential, aggregated per page.
-	references := service.NewReferenceIndex(repository.NewReferenceRepository(db))
 	h := handler.NewIntegrationCredentialHandler(s, encryptionKey, service.NewOAuthSync(oauthRepo, oauthRepo), migrationState, references)
 
 	return &Module{
