@@ -17,11 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Consumer guard:** unlike `api_key`, no FK protects this table — a
     credential's id can sit inside a jsonb column on custom tools, MCP
     servers, agents, agent integrations, or bots. Deleting one still in use
-    now answers **409**, naming the consumers, instead of leaving a dangling
-    reference that only fails the next time the tool runs.
+    now answers **409**, naming the consumers in `error.details.consumers`,
+    instead of leaving a dangling reference that only fails the next time the
+    tool runs. The guard **fails closed**: a store that cannot be read refuses
+    the delete rather than reporting "unused". Only a store genuinely absent
+    from this database (older CRM half) is skipped, and the catalog decides
+    that, not a failed query.
+  - **OAuth guard:** a `kind='oauth'` row points at its connection by
+    `(owner_store, owner_ref)`, never through the jsonb refs, so no consumer
+    ever held it. Deleting one while the connection is live now answers
+    **409** — before, the row was removed and the listing sync recreated it
+    on the next page load under a NEW id, orphaning every reference that
+    named the old one. Disconnect the integration first.
   - **Contract change:** deleting a credential that does not exist, or is
     already gone, answers **404** — never the previous 200/204, and no longer
     the 500 a plain error produced.
+  - **Known limit:** a consumer that starts referencing the credential between
+    the guard and the delete still ends up dangling. Closing that window means
+    rewriting the consumers' jsonb in the same transaction, which CRM-191
+    deferred.
 - **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set
   `is_active = false` — indistinguishable from the deactivate toggle — so the
   encrypted key never left the database and the name stayed taken by the
