@@ -9,6 +9,7 @@ import (
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/model"
 	"evo-ai-core-service/pkg/agent/service"
+	"evo-ai-core-service/pkg/evoextensions/agentquota"
 	folderShareService "evo-ai-core-service/pkg/folder_share/service"
 	"io"
 	"mime/multipart"
@@ -37,6 +38,13 @@ type AgentHandler interface {
 	GetShareAgent(c *gin.Context)
 	AssignFolder(c *gin.Context)
 }
+
+// checkAgentQuota is the seam every agent-creating route asks before writing.
+//
+// A package variable so a test can observe THAT it was asked and WITH WHAT: the
+// defect it exists for was a missing call site, which no test of the quota
+// decision itself can catch.
+var checkAgentQuota = agentquota.Check
 
 // agentHandler implements the AgentHandler interface
 type agentHandler struct {
@@ -125,6 +133,14 @@ func (h *agentHandler) Create(c *gin.Context) {
 	var req *model.AgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ValidationErrorResponse(c, err)
+		return
+	}
+
+	// Enterprise enforces the tenant's plan `agents` limit here; community's Check
+	// is a no-op. NOT the only create path — ImportAgents gates separately.
+	if err := checkAgentQuota(c.Request.Context(), 1); err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
 		return
 	}
 
@@ -407,6 +423,19 @@ func (h *agentHandler) ImportAgents(c *gin.Context) {
 	if err := json.Unmarshal(fileContent, &agentsData); err != nil {
 		response.ErrorResponse(c, errors.BadRequest, err.Error(), nil, http.StatusBadRequest)
 		return
+	}
+
+	// Gate the bulk path with the size of THIS request: the service creates one row
+	// per item with no size cap. Checked right after the unmarshal, before any row
+	// is written — the count is only knowable here, and rejecting later would leave
+	// a partial import to undo. An empty payload creates nothing, so it is not
+	// charged against the quota.
+	if len(agentsData) > 0 {
+		if err := checkAgentQuota(c.Request.Context(), len(agentsData)); err != nil {
+			code, message, httpCode := errors.HandleError(err)
+			response.ErrorResponse(c, code, message, nil, httpCode)
+			return
+		}
 	}
 
 	AgentImportRequest := model.AgentImportRequest{
