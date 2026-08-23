@@ -24,8 +24,8 @@ const quotaExceededCode = "QUOTA_EXCEEDED"
 //
 // The reads run on the request-bound, GUC-carrying connection so the COUNT
 // respects the RLS on evo_core_agents. Semantics mirror the gem's
-// QuotaCheckService(:agents): an absent/blank/non-integer limit, or no active
-// subscription, means UNLIMITED; 0 blocks everything.
+// QuotaCheckService(:agents): an absent/blank/non-integer limit, or no
+// subscription row at all, means UNLIMITED; 0 blocks everything.
 //
 // Infra errors fail OPEN — a transient DB hiccup must not block agent creation.
 // That is the opposite of tenantscope, which fails CLOSED on the same missing
@@ -73,20 +73,30 @@ func logSkip(tenantID, reason string) {
 	log.Printf("enterprise agent quota: NOT enforced for tenant %s — %s", tenantID, reason)
 }
 
+// limitQuery reads the tenant's plan `agents` limit.
+//
+// Subscription status is deliberately NOT filtered. The gem's subscription_for
+// is a bare find_by(tenant_id) with no status clause, so a canceled subscription
+// still imposes its plan's limit; filtering here would hand a canceled tenant an
+// UNLIMITED quota — the fail-open this card exists to close.
+//
+// The explicit tenant_id filter is mandatory: the subscriptions RLS policy is
+// permissive when the GUC is empty. LIMIT 1 needs no ORDER BY — the table has a
+// unique index on tenant_id ("one subscription per account").
+const limitQuery = `
+	SELECT p.limits ->> 'agents'
+	FROM evo_enterprise_tenant_subscriptions s
+	JOIN evo_enterprise_tenant_plans p ON p.id = s.tenant_plan_id
+	WHERE s.tenant_id = $1
+	LIMIT 1`
+
 // tenantAgentLimit resolves the tenant's plan `agents` limit. enforce is false
-// when the limit is UNLIMITED: no active subscription, the `agents` key is
+// when the limit is UNLIMITED: no subscription row, the `agents` key is
 // absent/null/blank, or the value is not an integer — mirroring
-// QuotaCheckService#raw_limit + #coerce_limit. The explicit tenant_id filter is
-// mandatory: the subscriptions RLS policy is permissive when the GUC is empty.
+// QuotaCheckService#raw_limit + #coerce_limit.
 func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenantID string) (limit int, enforce bool) {
 	var raw sql.NullString
-	err := conn.QueryRowContext(ctx, `
-		SELECT p.limits ->> 'agents'
-		FROM evo_enterprise_tenant_subscriptions s
-		JOIN evo_enterprise_tenant_plans p ON p.id = s.tenant_plan_id
-		WHERE s.tenant_id = $1
-		  AND s.status <> 'canceled'
-		LIMIT 1`, tenantID).Scan(&raw)
+	err := conn.QueryRowContext(ctx, limitQuery, tenantID).Scan(&raw)
 	switch {
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		// Split from ErrNoRows because the two mean opposite things: no
@@ -94,7 +104,7 @@ func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenan
 		logSkip(tenantID, fmt.Sprintf("reading the plan limit failed, treating as unlimited: %v", err))
 		return 0, false
 	case err != nil, !raw.Valid, raw.String == "":
-		// No active subscription / no `agents` key / blank → unlimited by design.
+		// No subscription row / no `agents` key / blank → unlimited by design.
 		return 0, false
 	}
 

@@ -147,6 +147,33 @@ func contains(haystack, needle string) bool {
 	return false
 }
 
+// --- the query's invariants --------------------------------------------------
+//
+// tenantAgentLimit cannot be unit-tested (*sql.Row is not fakeable and the repo
+// has no sqlmock), so these assert on the query text. They do not prove the SQL
+// runs correctly — that is the integration test this repo still lacks — but they
+// do fail if someone re-adds the clause they guard.
+
+// A canceled subscription must still impose its plan's limit. The gem's
+// subscription_for is a bare find_by(tenant_id); filtering status here would
+// hand a canceled tenant an UNLIMITED quota, which is the fail-open this card
+// exists to close.
+func TestLimitQuery_DoesNotFilterBySubscriptionStatus(t *testing.T) {
+	if contains(limitQuery, "status") {
+		t.Errorf("the plan-limit query filters on subscription status:\n%s\n"+
+			"the gem does not, so a canceled tenant would become unlimited", limitQuery)
+	}
+}
+
+// The tenant filter is not redundant with RLS: the subscriptions policy is
+// permissive when the GUC is empty, so dropping it would read another tenant's
+// plan.
+func TestLimitQuery_FiltersByTenant(t *testing.T) {
+	if !contains(limitQuery, "s.tenant_id = $1") {
+		t.Errorf("the plan-limit query lost its tenant filter:\n%s", limitQuery)
+	}
+}
+
 // --- F3: a non-enforcing exit must leave a trace -----------------------------
 //
 // A limit that is configured, believed and quietly absent is the bug this card
