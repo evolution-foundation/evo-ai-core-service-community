@@ -5,7 +5,9 @@ package agentquota
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -39,30 +41,58 @@ const quotaExceededCode = "QUOTA_EXCEEDED"
 //
 // Infra errors fail OPEN — a transient DB hiccup must not block agent creation;
 // the enforcement itself (count vs a resolved integer limit) is deterministic.
+// Note the asymmetry this creates with tenantscope, which fails CLOSED on the
+// same missing-connection scenario: if the wiring breaks, listing agents breaks
+// loudly and the quota disappears quietly. That is why every non-enforcing exit
+// below logs — see logSkip.
+//
+// KNOWN LIMITATION (TOCTOU, accepted): the count is read here and the INSERT
+// happens afterwards, with no shared lock or transaction. Two concurrent creates
+// at count == limit-1 both pass, so a tenant can end up one over its plan. This
+// is parity with the licensing gem's QuotaCheckService, which has the same race;
+// closing it here alone would make the Go path stricter than the Ruby one for no
+// gain. Documented rather than fixed, deliberately.
 func Check(ctx context.Context, additional int) error {
 	tenantID := runtimecontext.IDFromContext(ctx)
 	if tenantID == "" {
-		return nil // no tenant bound (standalone/unscoped) — nothing to enforce
+		// Not an anomaly: community/standalone requests carry no tenant.
+		return nil
 	}
 
 	conn, ok := runtimecontext.ConnFromContext(ctx)
 	if !ok {
-		return nil // no scope-bound connection — cannot read the tenant's rows
+		logSkip(tenantID, "no scope-bound connection — cannot read the tenant's rows")
+		return nil
 	}
 
 	limit, enforce := tenantAgentLimit(ctx, conn, tenantID)
 	if !enforce {
-		return nil // unlimited
+		return nil // unlimited — tenantAgentLimit already logged anything abnormal
 	}
 
 	var count int
 	if err := conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM evo_core_agents WHERE tenant_id = $1`, tenantID,
 	).Scan(&count); err != nil {
-		return nil // fail open on count error
+		logSkip(tenantID, fmt.Sprintf("counting agents failed, allowing the create: %v", err))
+		return nil
 	}
 
 	return evaluate(count, additional, limit)
+}
+
+// logSkip records that the quota did NOT enforce, and why.
+//
+// The card that opened this work is titled "nada falha, nada loga — o limite
+// simplesmente não existe na prática". A fix that reintroduces the same silence
+// leaves the operator exactly where they started: a limit that is configured,
+// believed, and quietly absent. The licensing gem takes the same posture,
+// warning on a malformed limit (quota_check_service.rb).
+//
+// Prefix mirrors wire_enterprise.go so the whole enterprise wiring is greppable
+// under one term.
+func logSkip(tenantID, reason string) {
+	log.Printf("enterprise agent quota: NOT enforced for tenant %s — %s", tenantID, reason)
 }
 
 // tenantAgentLimit resolves the tenant's plan `agents` limit. enforce is false
@@ -80,13 +110,24 @@ func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenan
 		WHERE s.tenant_id = $1
 		  AND s.status <> 'canceled'
 		LIMIT 1`, tenantID).Scan(&raw)
-	if err != nil || !raw.Valid || raw.String == "" {
-		return 0, false // no row / null / blank → unlimited
+	switch {
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		// A real failure reading the plan, not "this tenant has no subscription".
+		// Distinguished because the two mean opposite things to an operator: the
+		// second is normal, the first means the quota is off and nobody knows.
+		logSkip(tenantID, fmt.Sprintf("reading the plan limit failed, treating as unlimited: %v", err))
+		return 0, false
+	case err != nil, !raw.Valid, raw.String == "":
+		// No active subscription / no `agents` key / blank → unlimited by design.
+		return 0, false
 	}
 
 	value, convErr := strconv.Atoi(raw.String)
 	if convErr != nil {
-		return 0, false // malformed → unlimited
+		// Configured but unusable: the operator set something, and it is silently
+		// buying them nothing. The gem warns here too.
+		logSkip(tenantID, fmt.Sprintf("plan limit %q is not an integer, treating as unlimited", raw.String))
+		return 0, false
 	}
 	return value, true
 }

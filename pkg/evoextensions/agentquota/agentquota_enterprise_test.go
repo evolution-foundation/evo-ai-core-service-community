@@ -3,7 +3,10 @@
 package agentquota
 
 import (
+	"bytes"
+	"context"
 	stderrors "errors"
+	"log"
 	"net/http"
 	"testing"
 
@@ -142,4 +145,69 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// --- F3: a non-enforcing exit must leave a trace -----------------------------
+//
+// The card that opened this work is titled "nada falha, nada loga — o limite
+// simplesmente não existe na prática". A fix that skips enforcement in silence
+// puts the operator back exactly where they started: a limit that is
+// configured, believed, and quietly absent.
+//
+// These capture the standard logger and assert BOTH that a trace exists and
+// that it says which tenant and why — a bare "skipped" would not survive a
+// 3am incident.
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buffer bytes.Buffer
+	previousOut := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousOut)
+		log.SetFlags(previousFlags)
+	})
+	return &buffer
+}
+
+func TestLogSkip_NamesTheTenantAndTheReason(t *testing.T) {
+	logged := captureLog(t)
+
+	logSkip("tenant-abc", "counting agents failed, allowing the create: boom")
+
+	line := logged.String()
+	for _, want := range []string{"enterprise agent quota", "NOT enforced", "tenant-abc", "boom"} {
+		if !contains(line, want) {
+			t.Errorf("log line %q is missing %q", line, want)
+		}
+	}
+}
+
+// The prefix is load-bearing: wire_enterprise.go uses "enterprise ..." so the
+// whole enterprise wiring is greppable under one term. A skip that does not
+// match that grep is a skip nobody finds.
+func TestLogSkip_SharesTheEnterpriseWiringPrefix(t *testing.T) {
+	logged := captureLog(t)
+
+	logSkip("t1", "whatever")
+
+	if !contains(logged.String(), "enterprise ") {
+		t.Errorf("log line %q does not share the enterprise wiring prefix", logged.String())
+	}
+}
+
+// An unbound tenant is the community/standalone case — normal, and logging it on
+// every request would bury the abnormal ones.
+func TestCheck_UnboundTenantIsSilent(t *testing.T) {
+	logged := captureLog(t)
+
+	if err := Check(context.Background(), 1); err != nil {
+		t.Fatalf("Check with no tenant = %v, want nil", err)
+	}
+
+	if logged.Len() != 0 {
+		t.Errorf("unbound tenant logged %q; the normal path must stay quiet", logged.String())
+	}
 }
