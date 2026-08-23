@@ -15,43 +15,27 @@ import (
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
 )
 
-// quotaExceededCode matches the licensing gem's code so the CRM frontend's
-// existing QUOTA_EXCEEDED handling (localized toast) fires unchanged.
+// quotaExceededCode mirrors the licensing gem's code for the same refusal.
 const quotaExceededCode = "QUOTA_EXCEEDED"
 
-// Check enforces the tenant's plan `agents` limit before `additional` AI agents
-// are created.
-//
-// Enforcement lives here because a Rails before_action can never cover it: the
-// SPA posts to /evoai → this Go service directly, and the CRM Rails proxy also
-// lands here.
-//
-// `additional` is not an ergonomic detail. An earlier version took no count and
-// gated only the single-agent Create, which left POST /agents/import wide open:
-// a tenant capped at 2 agents uploaded a JSON with 500 and got all 500. The
-// licensing gem had already solved this — QuotaCheckService#call takes
-// `additional:` precisely for bulk paths, citing contacts#import.
+// Check enforces the tenant's plan `agents` limit before `additional` agents are
+// created. It cannot live in Rails: the SPA posts to this service directly, and
+// the CRM Rails proxy lands here too.
 //
 // The reads run on the request-bound, GUC-carrying connection so the COUNT
-// respects the fail-closed RLS on evo_core_agents. Semantics mirror the
-// licensing gem's QuotaCheckService(:agents): an absent/blank/non-integer limit
-// (or no active subscription) means UNLIMITED; 0 blocks everything; the request
-// is rejected when it would take the tenant past the limit
-// (count + additional > limit).
+// respects the RLS on evo_core_agents. Semantics mirror the gem's
+// QuotaCheckService(:agents): an absent/blank/non-integer limit, or no active
+// subscription, means UNLIMITED; 0 blocks everything.
 //
-// Infra errors fail OPEN — a transient DB hiccup must not block agent creation;
-// the enforcement itself (count vs a resolved integer limit) is deterministic.
-// Note the asymmetry this creates with tenantscope, which fails CLOSED on the
-// same missing-connection scenario: if the wiring breaks, listing agents breaks
-// loudly and the quota disappears quietly. That is why every non-enforcing exit
-// below logs — see logSkip.
+// Infra errors fail OPEN — a transient DB hiccup must not block agent creation.
+// That is the opposite of tenantscope, which fails CLOSED on the same missing
+// connection, so every non-enforcing exit logs (see logSkip).
 //
 // KNOWN LIMITATION (TOCTOU, accepted): the count is read here and the INSERT
-// happens afterwards, with no shared lock or transaction. Two concurrent creates
-// at count == limit-1 both pass, so a tenant can end up one over its plan. This
-// is parity with the licensing gem's QuotaCheckService, which has the same race;
-// closing it here alone would make the Go path stricter than the Ruby one for no
-// gain. Documented rather than fixed, deliberately.
+// happens afterwards, with no shared lock. Two concurrent creates at
+// count == limit-1 both pass, so a tenant can end up one over its plan. This is
+// parity with the gem, which has the same race; closing it on the Go side alone
+// would make this path stricter than the Ruby one for no gain.
 func Check(ctx context.Context, additional int) error {
 	tenantID := runtimecontext.IDFromContext(ctx)
 	if tenantID == "" {
@@ -81,15 +65,9 @@ func Check(ctx context.Context, additional int) error {
 	return evaluate(count, additional, limit)
 }
 
-// logSkip records that the quota did NOT enforce, and why.
-//
-// The card that opened this work is titled "nada falha, nada loga — o limite
-// simplesmente não existe na prática". A fix that reintroduces the same silence
-// leaves the operator exactly where they started: a limit that is configured,
-// believed, and quietly absent. The licensing gem takes the same posture,
-// warning on a malformed limit (quota_check_service.rb).
-//
-// Prefix mirrors wire_enterprise.go so the whole enterprise wiring is greppable
+// logSkip records that the quota did NOT enforce, and why. A limit that is
+// configured, believed and silently absent is the bug this card was opened for.
+// The prefix matches wire_enterprise.go so the enterprise wiring stays greppable
 // under one term.
 func logSkip(tenantID, reason string) {
 	log.Printf("enterprise agent quota: NOT enforced for tenant %s — %s", tenantID, reason)
@@ -98,9 +76,8 @@ func logSkip(tenantID, reason string) {
 // tenantAgentLimit resolves the tenant's plan `agents` limit. enforce is false
 // when the limit is UNLIMITED: no active subscription, the `agents` key is
 // absent/null/blank, or the value is not an integer — mirroring
-// QuotaCheckService#raw_limit + #coerce_limit. Only a non-"canceled"
-// subscription imposes a limit; the explicit tenant_id filter is mandatory
-// because the subscriptions RLS policy is permissive when the GUC is empty.
+// QuotaCheckService#raw_limit + #coerce_limit. The explicit tenant_id filter is
+// mandatory: the subscriptions RLS policy is permissive when the GUC is empty.
 func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenantID string) (limit int, enforce bool) {
 	var raw sql.NullString
 	err := conn.QueryRowContext(ctx, `
@@ -112,9 +89,8 @@ func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenan
 		LIMIT 1`, tenantID).Scan(&raw)
 	switch {
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
-		// A real failure reading the plan, not "this tenant has no subscription".
-		// Distinguished because the two mean opposite things to an operator: the
-		// second is normal, the first means the quota is off and nobody knows.
+		// Split from ErrNoRows because the two mean opposite things: no
+		// subscription is normal, a failed read means the quota is off silently.
 		logSkip(tenantID, fmt.Sprintf("reading the plan limit failed, treating as unlimited: %v", err))
 		return 0, false
 	case err != nil, !raw.Valid, raw.String == "":
@@ -124,26 +100,20 @@ func tenantAgentLimit(ctx context.Context, conn runtimecontext.ScopedConn, tenan
 
 	value, convErr := strconv.Atoi(raw.String)
 	if convErr != nil {
-		// Configured but unusable: the operator set something, and it is silently
-		// buying them nothing. The gem warns here too.
+		// Configured but unusable; the gem warns here too.
 		logSkip(tenantID, fmt.Sprintf("plan limit %q is not an integer, treating as unlimited", raw.String))
 		return 0, false
 	}
 	return value, true
 }
 
-// evaluate is the pure quota decision, kept separate from the DB reads so the
-// reject/allow boundary is unit-testable without a database.
+// evaluate is the pure quota decision, split from the DB reads so the
+// reject/allow boundary is unit-testable without a database. It rejects when the
+// request would take the tenant past the limit; limit 0 blocks everything.
 //
-// Reject when the request would take the tenant past the limit
-// (count + additional > limit); limit 0 blocks everything. With additional = 1
-// this is identical to the previous `count >= limit`, so the single-agent path
-// keeps its exact behaviour — the bulk path is what changes, from unchecked to
-// checked.
-//
-// A non-positive `additional` is treated as 1: a caller that cannot say how many
-// it is creating must not get a free pass, and an empty import has nothing to
-// reject anyway (the handler returns before this on an empty payload).
+// A non-positive `additional` counts as 1, so a caller that cannot say how many
+// it creates gets no free pass. An empty import never reaches here — ImportAgents
+// skips the gate when the payload is empty.
 func evaluate(count, additional, limit int) error {
 	if additional < 1 {
 		additional = 1

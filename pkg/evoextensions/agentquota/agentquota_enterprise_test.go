@@ -11,10 +11,11 @@ import (
 	"testing"
 
 	apierrors "evo-ai-core-service/internal/httpclient/errors"
+	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
 )
 
-// assertRejected checks the shape the CRM frontend depends on: the licensing
-// gem's QUOTA_EXCEEDED code (which drives the localized toast) and a 422.
+// assertRejected checks the refusal shape: the licensing gem's QUOTA_EXCEEDED
+// code and a 422.
 func assertRejected(t *testing.T, err error, what string) {
 	t.Helper()
 	if err == nil {
@@ -64,8 +65,7 @@ func TestEvaluate_SingleAgent(t *testing.T) {
 }
 
 // The finding this card came back for: POST /agents/import creates N agents in
-// one request, and a gate that can only answer for one at a time let a tenant
-// capped at 2 blow past it with a 500-agent JSON.
+// one request, and a gate that answers for one at a time cannot hold it.
 func TestEvaluate_BulkImport(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -149,14 +149,9 @@ func contains(haystack, needle string) bool {
 
 // --- F3: a non-enforcing exit must leave a trace -----------------------------
 //
-// The card that opened this work is titled "nada falha, nada loga — o limite
-// simplesmente não existe na prática". A fix that skips enforcement in silence
-// puts the operator back exactly where they started: a limit that is
-// configured, believed, and quietly absent.
-//
-// These capture the standard logger and assert BOTH that a trace exists and
-// that it says which tenant and why — a bare "skipped" would not survive a
-// 3am incident.
+// A limit that is configured, believed and quietly absent is the bug this card
+// was opened for. These assert the trace names WHICH tenant and WHY; a bare
+// "skipped" would not survive a 3am incident.
 
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
@@ -195,6 +190,30 @@ func TestLogSkip_SharesTheEnterpriseWiringPrefix(t *testing.T) {
 
 	if !contains(logged.String(), "enterprise ") {
 		t.Errorf("log line %q does not share the enterprise wiring prefix", logged.String())
+	}
+}
+
+// The skip that matters: the tenant IS bound but the connection is not, so the
+// quota silently disappears because the wiring broke. Enforcement cannot happen,
+// which makes the log the only thing standing between that and the card's
+// original symptom.
+func TestCheck_BoundTenantWithoutConnectionLogsTheSkip(t *testing.T) {
+	logged := captureLog(t)
+
+	ctx := runtimecontext.WithID(context.Background(), "tenant-xyz")
+	if err := Check(ctx, 1); err != nil {
+		t.Fatalf("Check with no connection = %v, want nil (fail open)", err)
+	}
+
+	line := logged.String()
+	if line == "" {
+		t.Fatal("the quota skipped enforcement in silence — the operator has no way " +
+			"to learn the limit is off (CRM-116 F3)")
+	}
+	for _, want := range []string{"tenant-xyz", "connection"} {
+		if !contains(line, want) {
+			t.Errorf("log line %q is missing %q", line, want)
+		}
 	}
 }
 

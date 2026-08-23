@@ -1,23 +1,17 @@
 //go:build !enterprise
 
-// Package agentquota is the agent-creation quota extension point.
+// Package agentquota gates agent creation on the tenant's plan limit. It is a
+// private sub-package, not one of the three EXTENSION_POINTS.md contracts; the
+// community/enterprise pair is swapped by build tag, as tenantfield already is.
 //
-// The community release is single-tenant with no plan limits, so Check is a
-// no-op. The enterprise build (agentquota_enterprise.go) enforces the tenant's
-// plan `agents` limit before an AI agent is created. This mirrors the neutral
-// "community no-op / enterprise fills" idiom already used by runtimecontext,
-// plugin and the installRuntimeScope wiring.
+// Community is single-tenant with no plan limits, so Check is a no-op.
 package agentquota
 
 import "context"
 
-// Check reports whether the current request may create `additional` AI agents.
+// Check reports whether the request may create `additional` AI agents.
 //
-// `additional` is part of the signature rather than assumed to be 1 because the
-// bulk path (POST /agents/import) creates N agents in one request, and a seam
-// that can only answer for one at a time cannot gate it. The licensing gem
-// settled this already — QuotaCheckService#call takes `additional:` for exactly
-// this reason, citing contacts#import.
-//
-// Community build: always nil (no enforcement).
+// `additional` is in the signature because POST /agents/import creates N agents
+// in one request, and a seam that only answers for one cannot gate it. The
+// licensing gem takes the same parameter, for the same reason.
 func Check(_ context.Context, _ int) error { return nil }

@@ -17,18 +17,9 @@ import (
 )
 
 // CRM-116 — the agent-creating routes must ASK the quota, and ask it for the
-// SIZE of the request.
-//
-// The unit tests on evaluate() prove the decision is right. They do not prove
-// the handler asks — and that is precisely what regressed: the quota was
-// enforced on Create and absent from ImportAgents, so a tenant capped at 2
-// agents uploaded a JSON with 500 and received all 500, with every quota test
-// green.
-//
-// These tests swap checkAgentQuota to observe the call. A first version of this
-// file asserted "the request was not answered 422", which passed with the gate
-// REMOVED — worse than no test, because it reads like coverage. Each test below
-// fails if its call site is deleted.
+// SIZE of the request. The unit tests on evaluate() prove the decision is right;
+// only these prove the handler asks, which is what regressed. They swap
+// checkAgentQuota to observe the call, so each fails if its call site is deleted.
 
 type quotaCall struct {
 	called     bool
@@ -125,7 +116,8 @@ func TestImportAgents_RefusalStopsTheImport(t *testing.T) {
 		t.Fatalf("answered %d, want 422 when the quota refuses", recorder.Code)
 	}
 	if body := recorder.Body.String(); !bytes.Contains([]byte(body), []byte("QUOTA_EXCEEDED")) {
-		t.Errorf("body %q does not carry QUOTA_EXCEEDED — the CRM toast keys off that code", body)
+		t.Errorf("body %q does not carry QUOTA_EXCEEDED — the refusal must name the "+
+			"gem's code, not answer a bare 422", body)
 	}
 }
 
@@ -143,6 +135,19 @@ func TestImportAgents_MalformedJSONNeverReachesTheQuota(t *testing.T) {
 	}
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("answered %d, want 400", recorder.Code)
+	}
+}
+
+// An empty payload creates nothing, so it must not be charged: a tenant already
+// at its limit would otherwise be refused for a request that writes no row.
+func TestImportAgents_EmptyPayloadIsNotCharged(t *testing.T) {
+	spy := spyQuota(t, nil)
+	_, c := importRequest(t, []byte("[]"))
+
+	runImport(c)
+
+	if spy.called {
+		t.Errorf("the quota was charged %d agents for an empty import", spy.additional)
 	}
 }
 
