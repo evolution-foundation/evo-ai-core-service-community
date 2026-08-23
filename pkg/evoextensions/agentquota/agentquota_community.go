@@ -11,6 +11,13 @@ package agentquota
 
 import "context"
 
-// Check reports whether the current request may create another AI agent.
+// Check reports whether the current request may create `additional` AI agents.
+//
+// `additional` is part of the signature rather than assumed to be 1 because the
+// bulk path (POST /agents/import) creates N agents in one request, and a seam
+// that can only answer for one at a time cannot gate it. The licensing gem
+// settled this already — QuotaCheckService#call takes `additional:` for exactly
+// this reason, citing contacts#import.
+//
 // Community build: always nil (no enforcement).
-func Check(_ context.Context) error { return nil }
+func Check(_ context.Context, _ int) error { return nil }

@@ -39,6 +39,16 @@ type AgentHandler interface {
 	AssignFolder(c *gin.Context)
 }
 
+// checkAgentQuota is the seam every agent-creating route asks before writing.
+//
+// A package variable rather than a direct call so a test can observe THAT it was
+// asked and WITH WHAT. That is not ceremony: the defect this indirection exists
+// for was a missing call site — the quota was enforced on Create and absent from
+// ImportAgents, and every unit test on the quota decision stayed green while a
+// tenant capped at 2 agents imported 500. A test that cannot see the call cannot
+// catch that, and a test that passes with the call removed is worse than none.
+var checkAgentQuota = agentquota.Check
+
 // agentHandler implements the AgentHandler interface
 type agentHandler struct {
 	agentService       service.AgentService
@@ -130,10 +140,14 @@ func (h *agentHandler) Create(c *gin.Context) {
 	}
 
 	// Enterprise builds enforce the tenant's plan `agents` limit here; the
-	// community build's Check is a no-op. This is the only seam every create
-	// path funnels through (the SPA posts to this core-service directly, and the
-	// CRM Rails proxy also lands here), so the quota cannot be enforced upstream.
-	if err := agentquota.Check(c.Request.Context()); err != nil {
+	// community build's Check is a no-op. The quota cannot be enforced upstream:
+	// the SPA posts to this core-service directly, and the CRM Rails proxy also
+	// lands here, so a Rails before_action would miss the real path.
+	//
+	// This is NOT the only create path — ImportAgents (below) creates in bulk and
+	// gates separately. An earlier version of this comment claimed it was, and
+	// that claim is what let the import ship unchecked.
+	if err := checkAgentQuota(c.Request.Context(), 1); err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
 		return
@@ -417,6 +431,21 @@ func (h *agentHandler) ImportAgents(c *gin.Context) {
 	var agentsData []map[string]interface{}
 	if err := json.Unmarshal(fileContent, &agentsData); err != nil {
 		response.ErrorResponse(c, errors.BadRequest, err.Error(), nil, http.StatusBadRequest)
+		return
+	}
+
+	// Gate the bulk path too, with the size of THIS request.
+	//
+	// The service loops the payload and calls agentRepository.Create per item with
+	// no size limit, so without this a tenant capped at 2 agents uploaded a JSON
+	// with 500 and received all 500 — the quota held on Create and leaked here.
+	//
+	// Checked right after the unmarshal, before any row is written: the count is
+	// only knowable at this point, and rejecting later would mean a partial import
+	// to undo.
+	if err := checkAgentQuota(c.Request.Context(), len(agentsData)); err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
 		return
 	}
 
