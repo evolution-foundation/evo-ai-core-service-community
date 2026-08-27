@@ -55,16 +55,16 @@ func TestOneToggleUpdatePreservesStoredConfig(t *testing.T) {
 	if final["use_emojis"] != true {
 		t.Error("the one key the request sent did not land")
 	}
+	// Compared value by value, not just non-nil: the backfill copies verbatim, so a
+	// key that comes back reshaped or defaulted is as broken as one that was wiped.
+	stored := storedConfig()
 	for _, key := range []string{"custom_tool_ids", "mcp_servers", "tools", "message_wait_time", "enable_text_segmentation", "inactivity_actions"} {
-		if final[key] == nil {
-			t.Errorf("%s was wiped by an update that never mentioned it", key)
+		if fmt.Sprintf("%v", final[key]) != fmt.Sprintf("%v", stored[key]) {
+			t.Errorf("%s = %v, want the stored %v", key, final[key], stored[key])
 		}
 	}
 	if final["api_key"] != "stored-key" {
 		t.Errorf("api_key = %v, want the stored one", final["api_key"])
-	}
-	if servers, ok := final["mcp_servers"].([]interface{}); !ok || len(servers) != 1 {
-		t.Errorf("mcp_servers lost its entry: %v", final["mcp_servers"])
 	}
 }
 
