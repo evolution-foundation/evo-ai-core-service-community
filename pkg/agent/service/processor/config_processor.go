@@ -95,8 +95,11 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		}
 	}
 
-	if preload, ok := agentConfig["preload_memory"].(bool); ok && preload {
-		if load, ok := agentConfig["load_memory"].(bool); !ok || !load {
+	// Validated over the EFFECTIVE view (request key wins, stored key fills in):
+	// a request that only flips preload_memory on must see the load_memory the
+	// agent already carries, or a valid partial update is rejected.
+	if preload, ok := effectiveValue(agentConfig, existingConfig, "preload_memory").(bool); ok && preload {
+		if load, ok := effectiveValue(agentConfig, existingConfig, "load_memory").(bool); !ok || !load {
 			return fmt.Errorf("preload_memory requires load_memory to be enabled")
 		}
 	}
@@ -133,9 +136,10 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		processedConfig["tools"] = processedTools
 	}
 
-	// Validate external agent provider if type is external
+	// Validate external agent provider if type is external. Effective view: an
+	// update that doesn't resend `provider` keeps (and revalidates) the stored one.
 	if agent.Type == "external" {
-		provider, ok := agentConfig["provider"].(string)
+		provider, ok := effectiveValue(agentConfig, existingConfig, "provider").(string)
 		if !ok || provider == "" {
 			return fmt.Errorf("provider is required for external type agents")
 		}
@@ -154,7 +158,38 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		processedConfig["provider"] = provider
 	}
 
+	// CRM-305 — partial update preserves what the request did not send. Up to
+	// here processedConfig holds only the REQUEST's keys (plus api_key), and
+	// UpdateConfig merges it over the request's raw config — so on update every
+	// stored key the client omitted (custom_tool_ids, mcp_servers, tools,
+	// toggles…) silently died. Backfill them from the stored config instead.
+	//
+	// Field-level, not a re-run of the pipeline over the stored values: those
+	// were already validated when they were saved, and re-resolving stored
+	// mcp_servers here would make an unrelated toggle update fail if a
+	// referenced server has since left the catalog. To CLEAR a key the client
+	// sends it explicitly (null / empty list) — absence means "keep".
+	if existingConfig != nil {
+		for key, value := range existingConfig {
+			if _, sent := processedConfig[key]; !sent {
+				processedConfig[key] = value
+			}
+		}
+	}
+
 	return config.UpdateConfig(agent, processedConfig)
+}
+
+// effectiveValue is the value the persisted config will end up with for key:
+// the request's when sent, the stored one otherwise (nil outside an update).
+func effectiveValue(requestConfig, existingConfig map[string]interface{}, key string) interface{} {
+	if value, ok := requestConfig[key]; ok {
+		return value
+	}
+	if existingConfig != nil {
+		return existingConfig[key]
+	}
+	return nil
 }
 
 func (p ConfigProcessor) validateOutputSchema(schema interface{}) error {
