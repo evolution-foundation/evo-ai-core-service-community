@@ -12,11 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// CRM-305: PUT /agents/{id} used to rebuild the config from the request alone
-// (only api_key survived), so a one-toggle edit wiped custom_tool_ids,
-// mcp_servers, tools and every other stored key — 200, no warning. These tests
-// pin the merge contract: keys the request does not send are preserved, keys it
-// sends win, and clearing is explicit (null / empty list), never implicit.
+// CRM-305: these pin the merge contract of PUT /agents/{id} — a key the request
+// does not send is preserved, a key it sends wins (explicit null included), and
+// nothing is cleared implicitly.
 
 // A processor whose MCP catalog REFUSES lookups: preserving stored mcp_servers
 // must not re-resolve them, or a toggle update starts failing whenever a
@@ -71,9 +69,9 @@ func TestOneToggleUpdatePreservesStoredConfig(t *testing.T) {
 }
 
 func TestOmittedConfigKeepsEverything(t *testing.T) {
-	// The worst case from the card: request without config left the agent with
-	// only an api_key.
-	final := processUpdate(t, "")
+	// The worst case from the card: request without config left the agent with only
+	// an api_key. "null" is the shape the handler produces for an absent config.
+	final := processUpdate(t, stringutils.InterfaceMapToJSON(nil))
 
 	for _, key := range []string{"custom_tool_ids", "mcp_servers", "tools", "message_wait_time", "enable_text_segmentation", "inactivity_actions"} {
 		if final[key] == nil {
@@ -94,6 +92,59 @@ func TestSentKeysWinAndEmptyListClears(t *testing.T) {
 	// Unsent neighbours still stand.
 	if final["mcp_servers"] == nil || final["enable_text_segmentation"] != true {
 		t.Error("clearing one key dragged unsent keys with it")
+	}
+}
+
+// commonFields is an allowlist, so a key outside it never reaches processedConfig.
+// Backfilling by that list alone made every such key read-only on PUT: the request's
+// value was silently reverted to the stored one.
+func TestKeyOutsideTheAllowlistStillWins(t *testing.T) {
+	existing := map[string]interface{}{
+		"api_key":                     "stored-key",
+		"allow_manage_labels":         false,
+		"allow_pipeline_manipulation": false,
+		"knowledge_max_results":       3,
+	}
+	agent := &model.Agent{Type: model.AgentTypeLLM, Config: `{"allow_manage_labels": true}`}
+
+	if err := processorWithDeadCatalog().ProcessAgentConfig(context.Background(), agent, existing); err != nil {
+		t.Fatalf("update rejected: %v", err)
+	}
+
+	final := stringutils.JSONToInterfaceMap(agent.Config)
+	if final["allow_manage_labels"] != true {
+		t.Errorf("allow_manage_labels = %v, the request sent true", final["allow_manage_labels"])
+	}
+	if final["allow_pipeline_manipulation"] != false || final["knowledge_max_results"] == nil {
+		t.Errorf("unsent neighbours outside the allowlist were not preserved: %s", agent.Config)
+	}
+}
+
+func TestExplicitNullClearsGuardedKeys(t *testing.T) {
+	// custom_tool_ids and mcp_servers are guarded by `!= nil`, so a null skips their
+	// processing entirely — the backfill must not read that as "not sent".
+	final := processUpdate(t, `{"custom_tool_ids": null, "mcp_servers": null}`)
+
+	if final["custom_tool_ids"] != nil {
+		t.Errorf("an explicit null must clear custom_tool_ids, got %v", final["custom_tool_ids"])
+	}
+	if final["mcp_servers"] != nil {
+		t.Errorf("an explicit null must clear mcp_servers, got %v", final["mcp_servers"])
+	}
+	if final["tools"] == nil || final["api_key"] != "stored-key" {
+		t.Errorf("clearing two keys dragged unsent ones with it: %v", final)
+	}
+}
+
+func TestProviderIsDroppedWhenTheAgentLeavesExternal(t *testing.T) {
+	existing := map[string]interface{}{"api_key": "stored-key", "provider": "flowise"}
+	agent := &model.Agent{Type: model.AgentTypeLLM, Config: `{"use_emojis": true}`}
+
+	if err := processorWithDeadCatalog().ProcessAgentConfig(context.Background(), agent, existing); err != nil {
+		t.Fatalf("update rejected: %v", err)
+	}
+	if final := stringutils.JSONToInterfaceMap(agent.Config); final["provider"] != nil {
+		t.Errorf("provider = %v, want it gone once the agent is no longer external", final["provider"])
 	}
 }
 

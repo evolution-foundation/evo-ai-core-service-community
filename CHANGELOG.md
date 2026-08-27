@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`PUT /agents/:id` now merges the config instead of replacing it** (CRM-305).
+  The update used to rebuild the agent config from the request alone — only
+  `api_key` survived — so a one-toggle edit wiped `custom_tool_ids`,
+  `mcp_servers`, `tools`, `message_wait_time`, the segmentation settings,
+  `inactivity_actions` and every other stored key, answering **200** with no
+  warning. A request with no `config` at all left the agent holding just its
+  `api_key`.
+  - **Contract:** a key the request sends wins, a key it omits is preserved,
+    and clearing is explicit — send `null` for a scalar or `[]` for a list.
+    Absence means "keep". This is a behavior change for any client that
+    relied on the old replace semantics to drop keys by omission.
+  - **Merged as stored, not revalidated:** stored values were already
+    validated when they were written, and re-resolving stored `mcp_servers`
+    would fail an unrelated toggle update whenever a referenced server had
+    since left the catalog.
+  - **Effective-view validation:** `preload_memory` checks the `load_memory`
+    the agent already carries, and an `external` agent that does not resend
+    `provider` keeps (and revalidates) the stored one — otherwise a valid
+    partial update would be rejected.
+  - **Read-only expansions stay out of the write.** `custom_tools` and
+    `custom_mcp_servers` are hydrated in memory on every read (EVO-2126); the
+    merge drops them from the stored config it merges from, so an update never
+    persists a frozen tool copy. Persisting one would also disable the
+    hydration guard for good, pinning the agent to a stale tool definition.
 - **`DELETE /integration-credentials/:id` now removes the row** (CRM-191). It
   used to set `is_active = false` like the deactivate toggle, so the encrypted
   value never left the database and its `(scope, name)` / `(owner_store,

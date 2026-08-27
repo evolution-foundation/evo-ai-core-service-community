@@ -158,22 +158,25 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		processedConfig["provider"] = provider
 	}
 
-	// CRM-305 — partial update preserves what the request did not send. Up to
-	// here processedConfig holds only the REQUEST's keys (plus api_key), and
-	// UpdateConfig merges it over the request's raw config — so on update every
-	// stored key the client omitted (custom_tool_ids, mcp_servers, tools,
-	// toggles…) silently died. Backfill them from the stored config instead.
-	//
-	// Field-level, not a re-run of the pipeline over the stored values: those
-	// were already validated when they were saved, and re-resolving stored
-	// mcp_servers here would make an unrelated toggle update fail if a
-	// referenced server has since left the catalog. To CLEAR a key the client
-	// sends it explicitly (null / empty list) — absence means "keep".
+	// CRM-305 — on update, a key the request did not send keeps its stored value.
+	// Backfilled as stored, not re-run through the pipeline: re-resolving stored
+	// mcp_servers would fail an unrelated toggle update if a server left the catalog.
 	if existingConfig != nil {
 		for key, value := range existingConfig {
-			if _, sent := processedConfig[key]; !sent {
-				processedConfig[key] = value
+			// The request owns every key it sent, explicit null included — even one
+			// the commonFields allowlist kept out of processedConfig.
+			if _, sent := agentConfig[key]; sent {
+				continue
 			}
+			// api_key may already hold a key generated because the stored one was empty.
+			if _, processed := processedConfig[key]; processed {
+				continue
+			}
+			// provider off an external agent is stale: nothing validates it anymore.
+			if key == "provider" && agent.Type != "external" {
+				continue
+			}
+			processedConfig[key] = value
 		}
 	}
 

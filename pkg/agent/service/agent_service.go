@@ -216,6 +216,7 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 func (s *agentService) processAgentUpdate(ctx context.Context, current, request *model.Agent) error {
 	// Parse current config to preserve existing values (especially api_key)
 	currentConfig := stringutils.JSONToInterfaceMap(current.Config)
+	dropHydratedCopies(currentConfig)
 
 	if err := s.configProcessor.ProcessAgentConfig(ctx, request, currentConfig); err != nil {
 		return errors.New(fmt.Sprintf("Failed to process agent config: %v", err))
@@ -357,6 +358,19 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 	}
 
 	return nil
+}
+
+// dropHydratedCopies removes what reconstructCustomConfigurations expands on read.
+// `current` comes from GetByID, so an update that carried these over would persist
+// the frozen tool copy EVO-2126 exists to prevent — and, once persisted, the
+// hydration guard never fires again and the agent is stuck on the stale copy.
+func dropHydratedCopies(config map[string]interface{}) {
+	if ids, ok := config["custom_tool_ids"].([]interface{}); ok && len(ids) > 0 {
+		delete(config, "custom_tools")
+	}
+	if ids, ok := config["custom_mcp_server_ids"].([]interface{}); ok && len(ids) > 0 {
+		delete(config, "custom_mcp_servers")
+	}
 }
 
 // dropEmptyPlaceholder removes an empty expandable key so the hydration guard in
