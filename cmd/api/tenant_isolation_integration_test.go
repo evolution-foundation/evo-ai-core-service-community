@@ -1,24 +1,19 @@
 //go:build integration && enterprise
 
-// Integration test for EVO-1625 (GO-5): proves the enterprise wire in
-// cmd/api (installRuntimeScope + ginAdapter) plugs Row-Level Security
-// fail-closed at the gin layer.
-//
-// Mirrors evo-enterprise-licensing-ruby/spec/integration/rls_leak_spec.rb
-// and evo-enterprise-licensing-go/tenant/integration_test.go (SDK), but
-// drives the full gin → tenant.Middleware → handler chain instead of the
-// raw http.Handler, which is exactly the surface SDK tests do NOT cover.
+// Integration test proving the enterprise wire in cmd/api
+// (installRuntimeScope + ginAdapter) keeps row-level security fail-closed
+// at the gin layer. It drives the full gin -> middleware -> handler chain
+// rather than the raw http.Handler, which the SDK's own tests do not cover.
 //
 // Run with:
 //
 //	EVO_TENANT_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/evo_community?sslmode=disable \
 //	go test -tags="integration enterprise" ./cmd/api/...
 //
-// The test connects as superuser to provision a synthetic RLS table
-// (tenant_test_rls_demo) and the gem-owned membership table
-// (evo_enterprise_tenant_memberships, the name installRuntimeScope's
-// boot-check expects), then connects through a NOSUPERUSER NOBYPASSRLS
-// role (mirroring F0.2 / EVO-1620) for the assertions.
+// It connects as superuser to provision a synthetic RLS table
+// (tenant_test_rls_demo) and the membership table installRuntimeScope's
+// boot-check expects, then connects through a NOSUPERUSER NOBYPASSRLS role
+// for the assertions.
 package main
 
 import (
@@ -159,10 +154,9 @@ func provision(t *testing.T, super *sql.DB) {
 		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tenant.MembershipTable),
 
 		// Membership table uses the canonical name so installRuntimeScope's
-		// boot-check (SELECT 1 FROM tenant.MembershipTable LIMIT 0) passes
-		// and SQLAuthorizer's prod query hits the right relation. F0.1 §11
-		// says evo_core_* / evo_enterprise_* tables are gem-owned in prod;
-		// the test owns them only for the duration of provision/teardown.
+		// boot-check passes and SQLAuthorizer's query hits the right relation.
+		// These tables belong to the enterprise migrations in prod; the test
+		// owns them only for the duration of provision/teardown.
 		fmt.Sprintf(`CREATE TABLE %s (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			user_id uuid NOT NULL,
@@ -377,10 +371,9 @@ func TestIntegration_RLSLeak_WireBindsAndFailsClosed(t *testing.T) {
 	})
 
 	t.Run("PolicyHasNoNullEscape", func(t *testing.T) {
-		// Inspect pg_policy to make sure the policy expression doesn't
-		// contain an `OR current_setting IS NULL` style escape that
-		// would silently disable RLS on unbound sessions. Mirrors the
-		// pg_policy check at the bottom of the Ruby rls_leak_spec.rb.
+		// Inspect pg_policy to make sure the policy expression carries no
+		// `OR current_setting IS NULL` style escape that would silently
+		// disable RLS on unbound sessions.
 		rows, err := super.Query(`
 			SELECT pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)
 			FROM pg_policy p
