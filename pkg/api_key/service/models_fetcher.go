@@ -213,6 +213,14 @@ func fetchGemini(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 		if !supportsGenerateContent(m.SupportedGenerationMethods) {
 			continue
 		}
+		// CRM-424: a listagem viva do Google traz MUITO além dos modelos de chat
+		// vigentes — imagem, TTS, transcribe, omni, música (lyria), robotics,
+		// deep-research, computer-use, a família Gemma e previews datados. Vários são
+		// descontinuados sem aviso e viram erro na cara do usuário. Filtramos pelo
+		// METADATA (não por allowlist fixa) — ver isCurrentGeminiChatModel.
+		if !isCurrentGeminiChatModel(id, m.SupportedGenerationMethods) {
+			continue
+		}
 		label := m.DisplayName
 		if label == "" {
 			label = id
@@ -233,4 +241,37 @@ func supportsGenerateContent(methods []string) bool {
 		}
 	}
 	return false
+}
+
+func supportsMethod(methods []string, want string) bool {
+	for _, m := range methods {
+		if m == want {
+			return true
+		}
+	}
+	return false
+}
+
+// isCurrentGeminiChatModel mantém só os modelos de chat de propósito geral VIGENTES
+// da listagem viva v1beta/models do Gemini (CRM-424). É um filtro DINÂMICO por
+// metadata — nunca uma allowlist fixa —, então modelos novos (ex.: gemini-3.7-flash)
+// aparecem sozinhos e os problemáticos somem sozinhos. Dois sinais, comprovados
+// contra o retorno real da API (39 com generateContent → 11 de chat):
+//
+//  1. Suporte a cache de contexto (createCachedContent): os modelos de chat geral têm;
+//     os especializados que a API TAMBÉM devolve — imagem, TTS, transcribe, omni,
+//     música (lyria), robotics, deep-research, computer-use e a família Gemma — NÃO
+//     têm. É o que separa "modelo que dirige um agente" do resto.
+//  2. Não ser preview/experimental datado: mesmo entre os que têm cache, as variantes
+//     `-preview`/`-exp` são retiradas e passam a errar; descartadas. Os estáveis
+//     (incl. aliases `-latest` e snapshots versionados) ficam.
+func isCurrentGeminiChatModel(id string, methods []string) bool {
+	if !supportsMethod(methods, "createCachedContent") {
+		return false
+	}
+	lower := strings.ToLower(id)
+	if strings.Contains(lower, "preview") || strings.Contains(lower, "exp") {
+		return false
+	}
+	return true
 }
