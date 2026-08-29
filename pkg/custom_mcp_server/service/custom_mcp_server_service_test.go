@@ -44,9 +44,8 @@ func newServiceForTest(url string) *customMcpServerService {
 	}
 }
 
-// EVO-1623 (GO-4): when an enterprise scope binds a tenant id on the
-// context, discoverTools must propagate it via X-Evo-Tenant-Id so the
-// processor's runtime_context middleware (PY-1) can authorize the call.
+// When a scope binds a tenant id on the context, discoverTools must
+// propagate it via X-Evo-Tenant-Id so the processor can authorize the call.
 func TestDiscoverTools_PropagatesTenantHeader_WhenBound(t *testing.T) {
 	cs := newCaptureServer(t)
 	svc := newServiceForTest(cs.URL)
@@ -66,9 +65,8 @@ func TestDiscoverTools_PropagatesTenantHeader_WhenBound(t *testing.T) {
 	}
 }
 
-// Community standalone build (and any request without a bound scope):
-// the runtime context returns "" and the header MUST be omitted —
-// this is the documented "no tenant → omit header" AC of EVO-1623.
+// Community standalone build (and any request without a bound scope): the
+// runtime context returns "" and the header must be omitted.
 func TestDiscoverTools_OmitsTenantHeader_WhenUnbound(t *testing.T) {
 	cs := newCaptureServer(t)
 	svc := newServiceForTest(cs.URL)
@@ -147,9 +145,8 @@ func TestTestConnection_DelegatesToProcessor(t *testing.T) {
 	}
 }
 
-// EVO-2139: propagate X-Evo-Tenant-Id on the test call too, so the
-// processor's runtime_context middleware (PY-1) can authorize it.
-// Paridade com TestDiscoverTools_PropagatesTenantHeader_WhenBound.
+// The test call propagates X-Evo-Tenant-Id too, so the processor can
+// authorize it. Parity with TestDiscoverTools_PropagatesTenantHeader_WhenBound.
 func TestTestConnection_PropagatesTenantHeader_WhenBound(t *testing.T) {
 	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":0}`)
 	svc := newServiceForTest(cs.URL)
