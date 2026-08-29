@@ -152,18 +152,11 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 		"Authorization": fmt.Sprintf("Bearer %s", token),
 	}
 
-	// EVO-1623 (GO-4): propagate the active tenant id to the processor
-	// so its runtime_context middleware (PY-1) can authorize the call.
-	// The community runtimecontext returns "" in standalone builds; we
-	// only attach the header when an enterprise scope has bound a real
-	// tenant id, satisfying the "no tenant → omit header" AC.
-	//
-	// The header name is the literal `X-Evo-Tenant-Id` — keep in sync
-	// with `tenant.HeaderTenantID` in evo-enterprise-licensing-go. We
-	// intentionally do NOT import the enterprise SDK constant here to
-	// preserve the community/enterprise decoupling that `runtimecontext`
-	// exists to enforce; the cross-repo contract is asserted by PY-1's
-	// integration tests instead.
+	// Propagate the active tenant to the processor so it can authorize the
+	// call. runtimecontext returns "" in community builds, so the header is
+	// attached only when a scope bound a real tenant id. The header name is
+	// spelled out rather than imported, to keep this package free of any
+	// enterprise dependency.
 	if tenantID := runtimecontext.IDFromContext(ctx); tenantID != "" {
 		headers["X-Evo-Tenant-Id"] = tenantID
 	}
@@ -217,7 +210,7 @@ func (s *customMcpServerService) Test(ctx context.Context, id uuid.UUID) (*model
 // MCPToolset. The previous implementation did a raw `GET /health` from Go
 // and failed for every compliant MCP server — the route does not exist in
 // the MCP spec. Mirrors the discoverTools delegation pattern above,
-// including X-Evo-Tenant-Id propagation (see EVO-1623).
+// including X-Evo-Tenant-Id propagation.
 func (s *customMcpServerService) testConnection(ctx context.Context, url string, headers map[string]string) (*model.TestResult, error) {
 	token, err := contextutils.GetToken(ctx)
 	if err != nil {
