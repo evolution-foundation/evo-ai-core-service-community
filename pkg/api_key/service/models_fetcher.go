@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -202,7 +203,10 @@ func fetchGemini(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ModelInfo, 0, len(resp.Models))
+	// Two lists on purpose: `current` is what we want to offer, `chatCapable` is
+	// the floor geminiModelsOrFallback falls back to.
+	current := make([]ModelInfo, 0, len(resp.Models))
+	chatCapable := make([]ModelInfo, 0, len(resp.Models))
 	for _, m := range resp.Models {
 		// Gemini returns names like "models/gemini-1.5-pro" — strip the prefix.
 		id := strings.TrimPrefix(m.Name, "models/")
@@ -210,37 +214,43 @@ func fetchGemini(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 			continue
 		}
 		// Only include models that can actually be used for chat.
-		if !supportsGenerateContent(m.SupportedGenerationMethods) {
-			continue
-		}
-		// CRM-424: a listagem viva do Google traz MUITO além dos modelos de chat
-		// vigentes — imagem, TTS, transcribe, omni, música (lyria), robotics,
-		// deep-research, computer-use, a família Gemma e previews datados. Vários são
-		// descontinuados sem aviso e viram erro na cara do usuário. Filtramos pelo
-		// METADATA (não por allowlist fixa) — ver isCurrentGeminiChatModel.
-		if !isCurrentGeminiChatModel(id, m.SupportedGenerationMethods) {
+		if !supportsMethod(m.SupportedGenerationMethods, "generateContent") {
 			continue
 		}
 		label := m.DisplayName
 		if label == "" {
 			label = id
 		}
-		out = append(out, ModelInfo{
+		info := ModelInfo{
 			Value:    "gemini/" + id,
 			Label:    label,
 			Provider: "gemini",
-		})
-	}
-	return out, nil
-}
-
-func supportsGenerateContent(methods []string) bool {
-	for _, m := range methods {
-		if m == "generateContent" {
-			return true
+		}
+		chatCapable = append(chatCapable, info)
+		if isCurrentGeminiChatModel(id, m.SupportedGenerationMethods) {
+			current = append(current, info)
 		}
 	}
-	return false
+	return geminiModelsOrFallback(current, chatCapable), nil
+}
+
+// geminiModelsOrFallback keeps the stricter filter from becoming an outage.
+// isCurrentGeminiChatModel leans on one metadata field Google does not document as
+// a contract; if it ever stops arriving, every model is dropped and the endpoint
+// answers "supported, nothing to offer" — which the picker reads as "use the
+// hardcoded list", i.e. exactly the retired models this fix removes. Serving the
+// unfiltered chat-capable set instead is noisier but never empty, and the warning
+// is the signal that the filter needs revisiting.
+func geminiModelsOrFallback(current, chatCapable []ModelInfo) []ModelInfo {
+	if len(current) > 0 || len(chatCapable) == 0 {
+		return current
+	}
+	log.Printf(
+		"[CRM-424] gemini: none of the %d chat-capable models passed isCurrentGeminiChatModel; "+
+			"serving them unfiltered — check supportedGenerationMethods upstream",
+		len(chatCapable),
+	)
+	return chatCapable
 }
 
 func supportsMethod(methods []string, want string) bool {
@@ -252,26 +262,39 @@ func supportsMethod(methods []string, want string) bool {
 	return false
 }
 
-// isCurrentGeminiChatModel mantém só os modelos de chat de propósito geral VIGENTES
-// da listagem viva v1beta/models do Gemini (CRM-424). É um filtro DINÂMICO por
-// metadata — nunca uma allowlist fixa —, então modelos novos (ex.: gemini-3.7-flash)
-// aparecem sozinhos e os problemáticos somem sozinhos. Dois sinais, comprovados
-// contra o retorno real da API (39 com generateContent → 11 de chat):
+// hasSegment reports whether any dash-separated segment of id equals one of want.
+// Segment equality, not substring: "exp" also lives inside words like "expert".
+func hasSegment(id string, want ...string) bool {
+	for _, segment := range strings.Split(strings.ToLower(id), "-") {
+		for _, w := range want {
+			if segment == w {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isCurrentGeminiChatModel keeps only the general-purpose chat models that Gemini's
+// live v1beta/models listing still offers. The listing also returns image, TTS,
+// transcribe, omni, music, robotics and Gemma models plus dated previews, several of
+// which get withdrawn without notice and then fail on every turn. Filtering is on
+// metadata rather than a pinned allowlist, so a new stable model appears on its own.
+// Three signals:
 //
-//  1. Suporte a cache de contexto (createCachedContent): os modelos de chat geral têm;
-//     os especializados que a API TAMBÉM devolve — imagem, TTS, transcribe, omni,
-//     música (lyria), robotics, deep-research, computer-use e a família Gemma — NÃO
-//     têm. É o que separa "modelo que dirige um agente" do resto.
-//  2. Não ser preview/experimental datado: mesmo entre os que têm cache, as variantes
-//     `-preview`/`-exp` são retiradas e passam a errar; descartadas. Os estáveis
-//     (incl. aliases `-latest` e snapshots versionados) ficam.
+//  1. isChatCapableID — the same by-name modality exclusions the OpenAI-compatible
+//     path applies, shared so a new modality is dropped for every provider at once.
+//  2. createCachedContent — general-purpose chat models advertise context caching;
+//     the specialised ones do not. This is what catches the families the name-based
+//     rules above miss (omni, gemma, lyria).
+//  3. no preview/experimental segment — withdrawn on Google's schedule, not ours.
+//     Stable ids stay, including the `-latest` aliases and versioned snapshots.
 func isCurrentGeminiChatModel(id string, methods []string) bool {
+	if !isChatCapableID(id) {
+		return false
+	}
 	if !supportsMethod(methods, "createCachedContent") {
 		return false
 	}
-	lower := strings.ToLower(id)
-	if strings.Contains(lower, "preview") || strings.Contains(lower, "exp") {
-		return false
-	}
-	return true
+	return !hasSegment(id, "preview", "exp", "experimental")
 }
