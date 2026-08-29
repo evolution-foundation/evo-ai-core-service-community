@@ -1,41 +1,17 @@
 //go:build enterprise
 
-// Package tenantscope is the enterprise-gated GORM read adapter that
-// routes READS (Query / Row / Raw) of tenant-scoped evo_core_* tables
-// onto the scope-bound connection published by the enterprise build via
-// runtimecontext.WithConn. It is the read-side symmetric of tenantstamp
-// (which stamps tenant_id on writes).
+// Package tenantscope routes READS (Query / Row / Raw) of tenant-scoped
+// evo_core_* tables onto the scope-bound connection. It is the read-side
+// symmetric of tenantstamp, which stamps writes.
 //
-// DECOUPLING (why this imports ONLY runtimecontext, never the SDK)
+// It resolves the scope only through the neutral runtimecontext bridge
+// (IDFromContext / ConnFromContext), never by importing the enterprise
+// module — that decoupling is the reason the bridge exists.
 //
-// The tenant CORE (membership Authorizer, the GUC-carrying per-request
-// tx) lives in the enterprise module. This adapter must NOT import it —
-// the community module has no dependency on enterprise. Instead, exactly
-// like tenantstamp, it reads through the neutral runtimecontext bridge:
-//   - runtimecontext.IDFromContext → is a tenant bound at all?
-//   - runtimecontext.ConnFromContext → the scope-bound connection the
-//     enterprise build published (its GUC-carrying *sql.Tx, which
-//     satisfies runtimecontext.ScopedConn == gorm.ConnPool).
-// The enterprise build injects both via WithID/WithConn in its wiring.
-//
-// WHY THIS EXISTS (the leak it closes)
-//
-// RLS policies on evo_core_* tables filter by app.current_tenant_id.
-// The enterprise Authorizer sets that GUC on a per-request tx. BUT the
-// GORM repositories read through the GLOBAL POOL — so the GUC is empty
-// on the pooled connection and the policy's permissive "GUC IS NULL →
-// all rows" branch leaks rows cross-tenant (eg. /agents/apikeys
-// returning another tenant's key). tenantstamp covered writes; this
-// covers reads.
-//
-// FAIL-CLOSED, NEVER SET-ON-POOL
-//
-// We route the statement onto the bound connection (ConnPool = conn) —
-// we NEVER run `SET app.current_tenant_id` on a pooled connection (it
-// would leak to the next checkout). When a tenant_id-bearing table is
-// read with no bound connection, we ABORT (fail-closed) rather than fall
-// through to the pool, because the permissive policy makes "fall
-// through" equal "leak".
+// Fail-closed: the statement is routed onto the bound connection; the
+// session setting is never applied to a pooled connection, and a
+// tenant-scoped read with no bound connection aborts rather than falling
+// through to the pool.
 package tenantscope
 
 import (

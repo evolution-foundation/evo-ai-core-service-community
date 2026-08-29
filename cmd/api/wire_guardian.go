@@ -14,7 +14,7 @@ import (
 // installGuardian boots the license guardian (enterprise lib) behind the
 // dedicated `guardian` build tag. It is a thin hook — all logic lives in the
 // enterprise lib. The guardian verifies the Ed25519-signed license and becomes
-// the single producer of the Redis cache the Ruby FeatureGate reads.
+// the single producer of the Redis cache the enterprise feature gate reads.
 //
 // Fail-mode: a misconfigured/unreachable guardian must NOT crash evo-core
 // (which also serves the AI plane). It simply doesn't produce the cache → the
