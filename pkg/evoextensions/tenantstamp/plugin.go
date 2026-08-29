@@ -1,23 +1,15 @@
 //go:build enterprise
 
-// Package tenantstamp is the enterprise GORM plugin that stamps
-// tenant_id on every INSERT into evo_core_* tables, mirroring the
-// SQLAlchemy before_flush listener in PY-3 (evo-enterprise-licensing-
-// python/src/evo_enterprise_licensing/tenant_stamp.py).
+// Package tenantstamp is the GORM plugin that stamps tenant_id on every
+// INSERT into evo_core_* tables.
 //
-// The plugin lives under //go:build enterprise so the community
-// release never imports it and the standalone build keeps its
-// single-scope behaviour unchanged.
+// It lives under //go:build enterprise, so the community release never
+// imports it and the standalone build keeps its single-scope behaviour.
 //
-// Fail-closed: when runtimecontext.IDFromContext(ctx) returns "" the
-// plugin does NOT set the column. The INSERT then carries tenant_id
-// = uuid.Nil, which the gem-owned RLS policy
-//
-//	USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
-//
-// rejects with "new row violates row-level security policy". The Go
-// layer never invents a tenant id — Postgres is the source of truth
-// for the binding contract.
+// Fail-closed: with no tenant bound in context the plugin leaves the
+// column unset and the INSERT carries uuid.Nil, which the row-level
+// security policy rejects. The Go layer never invents a tenant id —
+// Postgres owns the binding contract.
 package tenantstamp
 
 import (
@@ -44,23 +36,14 @@ const columnName = "tenant_id"
 // or worse a row bound to no tenant).
 var ErrScopeUnbound = errors.New("tenantstamp: schemaless tenant write with no bound connection")
 
-// schemalessTenantTables: tabelas onde o evo-core ESCREVE via struct mas cujo
-// struct community NÃO declara a coluna tenant_id (a migration enterprise do gem
-// adicionou-a NOT NULL + RLS no MESMO Postgres do CRM). LookUpField(tenant_id)
-// retorna nil → o stamp normal (preencher o VALOR no struct) não tem onde escrever.
+// schemalessTenantTables lists tables the service writes through a struct
+// that does not declare tenant_id, so LookUpField finds no field to stamp.
+// For these the INSERT is routed onto the scope-bound connection instead,
+// where the column DEFAULT resolves the tenant — the community struct is
+// never touched.
 //
-// SOLUÇÃO (simétrica ao tenantscope dos reads): em vez de carimbar o valor, ROTEAMOS
-// o INSERT para a tx GUC-carrying per-request (db.Statement.ConnPool = conn), onde o
-// Authorizer enterprise já fez set_config('app.current_tenant_id', tid, is_local). Aí
-// o DEFAULT da coluna (migration do gem: tenant_id DEFAULT current_setting(...)) lê o
-// tenant correto da tx. struct-create intacto → bot.ID volta via RETURNING. O write
-// normalmente roda no pool global com GUC vazio (só os reads eram roteados); isto o
-// roteia para tabelas do allowlist. NUNCA tocar o struct community (decisão: tenant_id
-// é eixo enterprise). agent_bots é o único caso hoje (os demais structs já declaram
-// tenant_id e seguem o caminho de stamp normal).
-//
-// CUIDADO: estritamente allowlist — não re-rotear writes de outras tabelas (mudaria
-// a conexão/atomicidade delas sem motivo).
+// Strictly an allowlist: re-routing other writes would change their
+// connection and atomicity for no reason.
 var schemalessTenantTables = map[string]struct{}{
 	"agent_bots": {},
 }
@@ -207,9 +190,8 @@ func stamp(db *gorm.DB) {
 	}
 	tid := runtimecontext.IDFromContext(ctx)
 	if tid == "" {
-		// Fail-closed: leave tenant_id at uuid.Nil; the RLS policy
-		// rejects the INSERT with "new row violates row-level
-		// security policy". This is the documented AC for EVO-1624.
+		// Fail-closed: leave tenant_id at uuid.Nil so the RLS policy
+		// rejects the INSERT.
 		return
 	}
 	parsed, err := uuid.Parse(tid)

@@ -81,9 +81,8 @@ func TestStamp_TenantBound_AutoFills(t *testing.T) {
 }
 
 func TestStamp_CallerSetTenantID_NotOverwritten(t *testing.T) {
-	// Seeders / backfill jobs pre-populate tenant_id explicitly.
-	// The plugin must respect that, mirroring PY-3's "skip if
-	// already set" rule.
+	// Seeders / backfill jobs pre-populate tenant_id explicitly, and the
+	// plugin must not overwrite it.
 	db := openSQLite(t)
 	ctxTenant := uuid.New()
 	callerTenant := uuid.New()
