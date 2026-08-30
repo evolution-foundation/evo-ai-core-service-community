@@ -54,23 +54,19 @@ func (h *mcpServerHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			permissionMiddleware.RequirePermission("ai_mcp_servers", "read"),
 			h.GetByID)
 
-		// Create permissions (admin only)
-		userAdminMiddleware := middleware.NewUserAdminMiddleware().GetUserAdminMiddleware()
+		// Write permissions. The auth service owns who may write here:
+		// ai_mcp_servers.<action> is granted to super_admin and account_owner by
+		// its RBAC seed, so a second local gate can only contradict it.
 		mcpServers.POST("",
 			permissionMiddleware.RequirePermission("ai_mcp_servers", "create"),
-			userAdminMiddleware,
 			h.Create)
 
-		// Update permissions (admin only)
 		mcpServers.PUT("/:id",
 			permissionMiddleware.RequirePermission("ai_mcp_servers", "update"),
-			userAdminMiddleware,
 			h.Update)
 
-		// Delete permissions (admin only)
 		mcpServers.DELETE("/:id",
 			permissionMiddleware.RequirePermission("ai_mcp_servers", "delete"),
-			userAdminMiddleware,
 			h.Delete)
 	}
 }
