@@ -70,6 +70,12 @@ func TestSanitizeAgent_RepairKeepsModelTheAgentAlreadyHas(t *testing.T) {
 		t.Fatalf("sanitizeAgent returned error: %v", err)
 	}
 
+	// Without this the assertion below is vacuous: a repair path that stopped
+	// matching would leave the model untouched and the test would still pass.
+	if agent.Type != model.AgentTypeLLM {
+		t.Fatalf("repair did not run: type is %q, want %q", agent.Type, model.AgentTypeLLM)
+	}
+
 	if agent.Model != "perplexity/sonar-pro" {
 		t.Errorf("repair overwrote a model the agent already had: got %q", agent.Model)
 	}
