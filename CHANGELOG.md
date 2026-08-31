@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agents stamped with the retired repair model are moved off it** (CRM-480,
+  migration `000023`). The old repair wrote a bare `gpt-4.1-nano` onto every agent
+  it coerced to `llm`, and that id retires on 2026-10-23. The repair cannot reach
+  those rows a second time — it only fills an empty model on an agent still typed
+  `sequential`/`parallel`/`loop`, and it persists the coercion — so the migration
+  rewrites them to the model the repair stamps today. Only the bare id is targeted;
+  every user-driven write stores `provider/model`, so a model the customer chose is
+  never repointed.
+  - **Self-hosted operators:** this rewrites the `model` column of matching agents
+    in `evo_core_agents`. Take a count of `model = 'gpt-4.1-nano'` before upgrading
+    if any of your agents may carry that id from a manual edit.
+  - **Row level security:** the table is `FORCE ROW LEVEL SECURITY`, which filters
+    even its owner, so the migration lifts `FORCE` for its own transaction and puts
+    it back. A role that does not own the table fails on that step instead of
+    reporting success after updating nothing. The affected count goes to the server
+    log via `RAISE LOG` — the migration runner discards notices.
+
 ### Changed
 
 - **`PUT /agents/:id` now merges the config instead of replacing it** (CRM-305).
