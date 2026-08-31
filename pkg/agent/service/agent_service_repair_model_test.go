@@ -79,4 +79,13 @@ func TestSanitizeAgent_RepairKeepsModelTheAgentAlreadyHas(t *testing.T) {
 	if agent.Model != "perplexity/sonar-pro" {
 		t.Errorf("repair overwrote a model the agent already had: got %q", agent.Model)
 	}
+
+	// The response object and the row can drift apart if the repair ever persists a
+	// copy, so the customer's model has to be asserted on the way to the database too.
+	if !repo.updateCalled {
+		t.Error("repair did not persist")
+	}
+	if repo.persistedModel != "perplexity/sonar-pro" {
+		t.Errorf("persisted model = %q, want %q", repo.persistedModel, "perplexity/sonar-pro")
+	}
 }
