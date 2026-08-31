@@ -25,6 +25,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Model stamped on a malformed Sequential/Parallel/Loop agent that is coerced to
+// LLM with no model of its own. It is persisted, so a retired id here does not
+// merely fail once — it lands in the customer's agent. The provider prefix is
+// required: LiteLLM downstream only guesses a bare name when it matches a family
+// it already knows, and errors out on anything else.
+const defaultRepairModel = "openai/gpt-5.6-luna"
+
 type AgentService interface {
 	Create(ctx context.Context, request model.Agent) (*model.Agent, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error)
@@ -439,7 +446,7 @@ func (s *agentService) sanitizeAgent(ctx context.Context, agent *model.Agent) er
 			agent.Type = model.AgentTypeLLM
 
 			if agent.Model == "" {
-				agent.Model = "gpt-4.1-nano"
+				agent.Model = defaultRepairModel
 			}
 
 			llmConfig := map[string]interface{}{
