@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
+	"evo-ai-core-service/pkg/evoextensions/tenantmembership"
 	"evo-ai-core-service/pkg/evoextensions/tenantscope"
 	"evo-ai-core-service/pkg/evoextensions/tenantstamp"
 
@@ -40,11 +41,18 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 			tenant.MembershipTable, err)
 	}
 
-	scope := tenant.NewEnterpriseScope(tenant.NewSQLAuthorizer(sqlDB))
+	// The SDK authorizer fails OPEN when EVO_LICENSING_PERMISSIVE_MEMBERSHIP
+	// is set, which is the ecosystem default. Gate it behind a membership
+	// check that ignores that flag, so a non-member is refused before any
+	// transaction binds app.current_tenant_id.
+	checker := tenantmembership.NewSQLChecker(tenantmembership.NewSQLQuerier(sqlDB))
+	scope := tenant.NewEnterpriseScope(
+		newEnforcedAuthorizer(checker, tenant.NewSQLAuthorizer(sqlDB)),
+	)
 
 	mw := tenant.Middleware(scope, nil) // nil → DefaultUserIDExtractor reads ctx.Value("user_id")
 	v1.Use(ginAdapter(mw))
-	log.Println("enterprise wiring: tenant middleware installed on /api/v1")
+	log.Println("enterprise wiring: tenant middleware installed on /api/v1 (membership enforced)")
 
 	// Stamp tenant_id on every INSERT into evo_core_* from the request
 	// context. Fail-closed: with no tenant bound the field stays uuid.Nil
