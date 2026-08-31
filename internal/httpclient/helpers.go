@@ -12,6 +12,19 @@ import (
 	"time"
 )
 
+type StatusError struct {
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("HTTP request failed with status %d: %s", e.Code, e.Body)
+}
+
+func (e *StatusError) StatusCode() int {
+	return e.Code
+}
+
 func SetHeaders(req *http.Request, headers map[string]string) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -137,7 +150,7 @@ func DoJSON[Res any](
 	}
 
 	if resp.StatusCode != httpStatusCode {
-		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, &StatusError{Code: resp.StatusCode, Body: string(body)}
 	}
 
 	var result Res
