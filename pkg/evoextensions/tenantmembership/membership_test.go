@@ -3,6 +3,7 @@ package tenantmembership
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -46,10 +47,11 @@ func TestDeniedWhenNotAMember(t *testing.T) {
 	}
 }
 
-// evolution_admin and agency_owner are branches of the single allow-set
-// statement, so they surface here as the row that statement returns.
+// evolution_admin, agency_owner and agency_support are branches of the
+// single allow-set statement, so they surface here as the row that
+// statement returns. The SQL itself is asserted by TestAllowQueryShape.
 func TestAllowedForGlobalRoles(t *testing.T) {
-	for _, role := range []string{"evolution_admin", "agency_owner"} {
+	for _, role := range []string{"evolution_admin", "agency_owner", "agency_support"} {
 		t.Run(role, func(t *testing.T) {
 			checker := NewSQLChecker(&fakeQuerier{allowed: true})
 
@@ -126,5 +128,31 @@ func TestPermissiveEnvDoesNotReopenTheLeak(t *testing.T) {
 				t.Fatalf("permissive env %q must not authorize a non-member, got %v", value, err)
 			}
 		})
+	}
+}
+
+// The gem admits ANY global membership into its own agency's tenants, not
+// just agency_owner (engine.rb tenant_membership_check, mirrored by
+// Roles.global_role_applies?). Pinning the role in SQL would 403 a global
+// agency_support on the very accounts it exists to operate, so the
+// agency-bridge branch must carry no role predicate — and must nil-guard
+// both sides of the agency comparison.
+func TestAllowQueryShape(t *testing.T) {
+	agencyBranch := allowQuery[strings.Index(allowQuery, "OR EXISTS"):]
+
+	if strings.Contains(agencyBranch, "m.role") {
+		t.Error("the agency-bridge branch must not pin a role: a global agency_support reaches its own agency's tenants")
+	}
+	for _, guard := range []string{"u.agency_id IS NOT NULL", "t.agency_id IS NOT NULL"} {
+		if !strings.Contains(agencyBranch, guard) {
+			t.Errorf("missing nil-guard %q: a null agency_id must never match a null agency_id", guard)
+		}
+	}
+	if !strings.Contains(agencyBranch, "t.agency_id = u.agency_id") {
+		t.Error("the agency bridge must compare tenant.agency_id against users.agency_id")
+	}
+	// evolution_admin stays the only role that cuts across agencies.
+	if !strings.Contains(allowQuery, "tenant_id IS NULL AND role = 'evolution_admin'") {
+		t.Error("evolution_admin must remain the only unconditional global role")
 	}
 }

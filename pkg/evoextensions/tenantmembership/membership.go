@@ -27,13 +27,20 @@ const (
 // mapping it to HTTP 403 can never fall through to a bound scope.
 var ErrDenied = errors.New("tenantmembership: denied")
 
-// allowQuery mirrors the TenantPolicy allow-set of the Ruby gem. A caller
-// is allowed when one of the following holds:
+// allowQuery mirrors the gem allow-set (engine.rb tenant_membership_check
+// and Roles.global_role_applies?). A caller is allowed when:
 //
 //	(a) a per-tenant membership row exists for (user, tenant);
-//	(b) the user holds a global evolution_admin membership;
-//	(c) the user holds a global agency_owner membership and the requested
-//	    tenant belongs to that user's agency.
+//	(b) the user holds a global evolution_admin membership, which cuts
+//	    across tenants unconditionally;
+//	(c) the user holds ANY other global membership and the requested tenant
+//	    belongs to that user's agency. Global rows other than
+//	    evolution_admin are agency-team projections, so the role is not
+//	    matched here: agency_owner and agency_support alike hold one global
+//	    row and reach every tenant of their own agency, and only it.
+//
+// Rule (c) nil-guards both sides of the agency bridge, so a missing
+// agency_id never matches a missing agency_id.
 //
 // The table carries no status column: the presence of the row is the
 // membership. Anything outside the allow-set yields zero rows and denies.
@@ -52,8 +59,8 @@ WHERE
     JOIN ` + TenantsTable + ` t ON t.id = $2
     WHERE m.user_id = $1
       AND m.tenant_id IS NULL
-      AND m.role = 'agency_owner'
       AND u.agency_id IS NOT NULL
+      AND t.agency_id IS NOT NULL
       AND t.agency_id = u.agency_id
   )
 LIMIT 1`
