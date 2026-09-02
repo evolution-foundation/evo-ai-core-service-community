@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agents stamped with the retired repair model are moved off it** (CRM-480,
+  migration `000023`). The old repair wrote a bare `gpt-4.1-nano` onto every agent
+  it coerced to `llm`, and that id retires on 2026-10-23. The repair cannot reach
+  those rows a second time — it only fills an empty model on an agent still typed
+  `sequential`/`parallel`/`loop`, and it persists the coercion — so the migration
+  rewrites them to the model the repair stamps today. Only the bare id is targeted;
+  every user-driven write stores `provider/model`, so a model the customer chose is
+  never repointed.
+  - **Self-hosted operators:** this rewrites the `model` column of matching agents
+    in `evo_core_agents`. Take a count of `model = 'gpt-4.1-nano'` before upgrading
+    if any of your agents may carry that id from a manual edit.
+  - **Row level security:** the table is `FORCE ROW LEVEL SECURITY`, which filters
+    even its owner, so the migration lifts `FORCE` for its own transaction and puts
+    it back. A role that does not own the table fails on that step instead of
+    reporting success after updating nothing. The affected count goes to the server
+    log via `RAISE LOG` — the migration runner discards notices.
+
+### Changed
+
+- **`PUT /agents/:id` now merges the config instead of replacing it** (CRM-305).
+  The update used to rebuild the agent config from the request alone — only
+  `api_key` survived — so a one-toggle edit wiped `custom_tool_ids`,
+  `mcp_servers`, `tools`, `message_wait_time`, the segmentation settings,
+  `inactivity_actions` and every other stored key, answering **200** with no
+  warning. A request with no `config` at all left the agent holding just its
+  `api_key`.
+  - **Contract:** a key the request sends wins, a key it omits is preserved,
+    and clearing is explicit — send `null` for a scalar or `[]` for a list.
+    Absence means "keep". This is a behavior change for any client that
+    relied on the old replace semantics to drop keys by omission.
+  - **Merged as stored, not revalidated:** stored values were already
+    validated when they were written, and re-resolving stored `mcp_servers`
+    would fail an unrelated toggle update whenever a referenced server had
+    since left the catalog.
+  - **Effective-view validation:** `preload_memory` checks the `load_memory`
+    the agent already carries, and an `external` agent that does not resend
+    `provider` keeps (and revalidates) the stored one — otherwise a valid
+    partial update would be rejected.
+  - **Read-only expansions stay out of the write.** `custom_tools` and
+    `custom_mcp_servers` are hydrated in memory on every read (EVO-2126); the
+    merge drops them from the stored config it merges from, so an update never
+    persists a frozen tool copy. Persisting one would also disable the
+    hydration guard for good, pinning the agent to a stale tool definition.
+- **`DELETE /integration-credentials/:id` now removes the row** (CRM-191). It
+  used to set `is_active = false` like the deactivate toggle, so the encrypted
+  value never left the database and its `(scope, name)` / `(owner_store,
+  owner_ref)` stayed taken. The delete is a hard delete (the model has no
+  `deleted_at`).
+  - **Consumer guard:** unlike `api_key`, no FK protects this table — a
+    credential's id can sit inside a jsonb column on custom tools, MCP
+    servers, agents, agent integrations, or bots. Deleting one still in use
+    now answers **409**, naming the consumers in `error.details.consumers`,
+    instead of leaving a dangling reference that only fails the next time the
+    tool runs. The guard **fails closed**: a store that cannot be read refuses
+    the delete rather than reporting "unused". Only a store genuinely absent
+    from this database (older CRM half) is skipped, and the catalog decides
+    that, not a failed query.
+  - **OAuth guard:** a `kind='oauth'` row points at its connection by
+    `(owner_store, owner_ref)`, never through the jsonb refs, so no consumer
+    ever held it. Deleting one while the connection is live now answers
+    **409** — before, the row was removed and the listing sync recreated it
+    on the next page load under a NEW id, orphaning every reference that
+    named the old one. Disconnect the integration first.
+  - **Contract change:** deleting a credential that does not exist, or is
+    already gone, answers **404** — never the previous 200/204, and no longer
+    the 500 a plain error produced.
+  - **Known limit:** a consumer that starts referencing the credential between
+    the guard and the delete still ends up dangling. Closing that window means
+    rewriting the consumers' jsonb in the same transaction, which CRM-191
+    deferred.
+- **`DELETE /agents/apikeys/:id` now removes the row** (CRM-186). It used to set
+  `is_active = false` — indistinguishable from the deactivate toggle — so the
+  encrypted key never left the database and the name stayed taken by the
+  `(name, tenant_id)` unique. The delete is a hard delete (the model has no
+  `deleted_at`); agents pointing at the key keep existing with
+  `api_key_id = NULL` (`ON DELETE SET NULL`).
+  - **Contract change:** deleting a key that does not exist, or is already
+    gone, answers **404** — never the previous 200/204, and no longer the 500
+    a plain error produced. An account-level caller still meets the
+    installation-scope gate's fail-closed **403** when the target cannot be
+    read to decide its scope.
+  - Rows already `is_active = false` are a mix of "deleted" and "deactivated"
+    that no migration can tell apart; clean them up through the credentials
+    screen.
+- **`PUT /agents/apikeys/:id` answers 404 for an unknown key** instead of 500.
+  It replaced the mapped lookup error with a plain one, which the error handler
+  could only read as an internal error.
+
 ## [v1.0.0-rc6] - 2026-07-04
 
 Feature release — server-side advanced filtering across the list endpoints, a rebuilt Custom Tool test endpoint, a standalone community image build, and enterprise multi-tenancy extension points that remain no-ops in the community build.

@@ -25,6 +25,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// Persisted onto a malformed agent coerced to LLM, so a retired id here lands in
+// the customer's data. Prefixed: LiteLLM only guesses bare names it already knows.
+const defaultRepairModel = "openai/gpt-5.6-luna"
+
 type AgentService interface {
 	Create(ctx context.Context, request model.Agent) (*model.Agent, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error)
@@ -216,6 +220,7 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 func (s *agentService) processAgentUpdate(ctx context.Context, current, request *model.Agent) error {
 	// Parse current config to preserve existing values (especially api_key)
 	currentConfig := stringutils.JSONToInterfaceMap(current.Config)
+	dropHydratedCopies(currentConfig)
 
 	if err := s.configProcessor.ProcessAgentConfig(ctx, request, currentConfig); err != nil {
 		return errors.New(fmt.Sprintf("Failed to process agent config: %v", err))
@@ -248,7 +253,42 @@ func isFlowType(t string) bool {
 		t == model.AgentTypeLoop
 }
 
-func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agent *model.Agent) error {
+// customToolCache memoizes the tool catalog across one read: the hydration is no
+// longer persisted, so a page of N agents would otherwise fire N identical List calls.
+type customToolCache struct {
+	tools  []customToolModel.CustomToolResponse
+	err    error
+	loaded bool
+}
+
+func (s *agentService) listCustomTools(ctx context.Context, cache *customToolCache) ([]customToolModel.CustomToolResponse, error) {
+	if cache != nil && cache.loaded {
+		return cache.tools, cache.err
+	}
+
+	req := customToolModel.CustomToolListRequest{
+		Page:     1,
+		PageSize: 100,
+		Search:   "",
+	}
+	result, err := s.customToolService.List(ctx, req)
+
+	var tools []customToolModel.CustomToolResponse
+	if err == nil {
+		tools = result.Items
+	}
+
+	if cache != nil {
+		cache.tools, cache.err, cache.loaded = tools, err, true
+	}
+
+	return tools, err
+}
+
+// reconstructCustomConfigurations hydrates the agent config in memory only: persisting
+// it froze a stale copy of the tool inside the agent (EVO-2126). Call it through
+// prepareAgentForRead so nothing writes the agent back afterwards.
+func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agent *model.Agent, cache *customToolCache) error {
 	if agent.Config == "" {
 		return nil
 	}
@@ -268,17 +308,12 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 			}
 
 			if len(toolIDs) > 0 {
-				req := customToolModel.CustomToolListRequest{
-					Page:     1,
-					PageSize: 100,
-					Search:   "",
-				}
-				tools, err := s.customToolService.List(ctx, req)
+				tools, err := s.listCustomTools(ctx, cache)
 				if err != nil {
 					log.Printf("Error getting custom tools for agent %s: %v", agent.ID, err)
 				} else {
 					filteredTools := make([]interface{}, 0)
-					for _, tool := range tools.Items {
+					for _, tool := range tools {
 						for _, id := range toolIDs {
 							if tool.ID == id {
 								httpTool := s.customToolService.ConvertToHTTPTool(tool)
@@ -324,10 +359,57 @@ func (s *agentService) reconstructCustomConfigurations(ctx context.Context, agen
 
 	if reconstructed {
 		agent.Config = stringutils.InterfaceMapToJSON(config)
-		if _, err := s.agentRepository.Update(ctx, agent, agent.ID); err != nil {
-			log.Printf("Error updating agent %s: %v", agent.ID, err)
-			return err
+	}
+
+	return nil
+}
+
+// dropHydratedCopies removes what reconstructCustomConfigurations expands on read.
+// `current` comes from GetByID, so an update that carried these over would persist
+// the frozen tool copy EVO-2126 exists to prevent — and, once persisted, the
+// hydration guard never fires again and the agent is stuck on the stale copy.
+func dropHydratedCopies(config map[string]interface{}) {
+	if ids, ok := config["custom_tool_ids"].([]interface{}); ok && len(ids) > 0 {
+		delete(config, "custom_tools")
+	}
+	if ids, ok := config["custom_mcp_server_ids"].([]interface{}); ok && len(ids) > 0 {
+		delete(config, "custom_mcp_servers")
+	}
+}
+
+// dropEmptyPlaceholder removes an empty expandable key so the hydration guard in
+// reconstructCustomConfigurations keeps firing while the matching *_ids list is set.
+func dropEmptyPlaceholder(target map[string]interface{}, key string, source map[string]interface{}, idsKey string) {
+	ids, ok := source[idsKey].([]interface{})
+	if !ok || len(ids) == 0 {
+		return
+	}
+
+	switch value := target[key].(type) {
+	case nil:
+		delete(target, key)
+	case []interface{}:
+		if len(value) == 0 {
+			delete(target, key)
 		}
+	case map[string]interface{}:
+		if len(value) == 0 {
+			delete(target, key)
+		}
+	}
+}
+
+// prepareAgentForRead readies an agent for a read response. sanitizeAgent persists its
+// fix with a whole-record Update, so it must run BEFORE the hydration — after it, that
+// Update would write the expanded config back and re-freeze the copy (EVO-2126).
+func (s *agentService) prepareAgentForRead(ctx context.Context, agent *model.Agent, cache *customToolCache) error {
+	if err := s.sanitizeAgent(ctx, agent); err != nil {
+		log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+		return err
+	}
+
+	if err := s.reconstructCustomConfigurations(ctx, agent, cache); err != nil {
+		log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
 	}
 
 	return nil
@@ -361,7 +443,7 @@ func (s *agentService) sanitizeAgent(ctx context.Context, agent *model.Agent) er
 			agent.Type = model.AgentTypeLLM
 
 			if agent.Model == "" {
-				agent.Model = "gpt-4.1-nano"
+				agent.Model = defaultRepairModel
 			}
 
 			llmConfig := map[string]interface{}{
@@ -396,6 +478,11 @@ func (s *agentService) sanitizeAgent(ctx context.Context, agent *model.Agent) er
 				llmConfig["custom_mcp_servers"] = []interface{}{}
 			}
 
+			// The hydration guard keys on presence, so an empty placeholder here would
+			// skip the expansion forever and the agent would lose its tools on read.
+			dropEmptyPlaceholder(llmConfig, "custom_tools", config, "custom_tool_ids")
+			dropEmptyPlaceholder(llmConfig, "custom_mcp_servers", config, "custom_mcp_server_ids")
+
 			for key, value := range config {
 				if _, exists := llmConfig[key]; !exists && key != "sub_agents" {
 					llmConfig[key] = value
@@ -422,12 +509,7 @@ func (s *agentService) GetByID(ctx context.Context, id uuid.UUID) (*model.Agent,
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
-	if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-		log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-	}
-
-	if err := s.sanitizeAgent(ctx, agent); err != nil {
-		log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+	if err := s.prepareAgentForRead(ctx, agent, nil); err != nil {
 		return nil, err
 	}
 
@@ -445,13 +527,9 @@ func (s *agentService) List(ctx context.Context, page int, pageSize int, filters
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
+	toolCache := &customToolCache{}
 	for i, agent := range agents {
-		if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-			continue
-		}
-		if err := s.sanitizeAgent(ctx, agent); err != nil {
-			log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+		if err := s.prepareAgentForRead(ctx, agent, toolCache); err != nil {
 			continue
 		}
 		agents[i] = agent
@@ -685,13 +763,9 @@ func (s *agentService) ListAgentsByFolderID(ctx context.Context, folderId uuid.U
 		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
+	toolCache := &customToolCache{}
 	for i, agent := range agents {
-		if err := s.reconstructCustomConfigurations(ctx, agent); err != nil {
-			log.Printf("Error reconstructing configurations for agent %s: %v", agent.ID, err)
-			continue
-		}
-		if err := s.sanitizeAgent(ctx, agent); err != nil {
-			log.Printf("Error sanitizing agent %s: %v", agent.ID, err)
+		if err := s.prepareAgentForRead(ctx, agent, toolCache); err != nil {
 			continue
 		}
 		agents[i] = agent
@@ -799,4 +873,3 @@ func (s *agentService) ListReadAgents(ctx context.Context, request *model.AgentR
 
 	return agents, nil
 }
-

@@ -61,6 +61,28 @@ func queryGlue(operator string) string {
 	return "AND"
 }
 
+// splitFilterValues reads a clause value as a SET: `llm,external` is two values, not one
+// literal. Only the set operators call it, so a name filtered with `contains` keeps its
+// commas. Without it the Agents list has to send one clause per (type, model) pair —
+// the clause list is flat, so `(type IN ...) AND (model IN ...)` has no other spelling.
+func splitFilterValues(raw string) []string {
+	values := make([]string, 0, 1)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
+func loweredValues(values []string) []string {
+	lowered := make([]string, len(values))
+	for i, value := range values {
+		lowered[i] = strings.ToLower(value)
+	}
+	return lowered
+}
+
 func agentFilterFragment(filter model.AgentListFilter) (string, []interface{}, bool) {
 	column, ok := agentFilterColumns[filter.AttributeKey]
 	if !ok {
@@ -84,13 +106,21 @@ func agentFilterFragment(filter model.AgentListFilter) (string, []interface{}, b
 
 	switch filter.FilterOperator {
 	case "equal_to":
+		// A date set has no caller and no obvious meaning; keep the single-value form.
 		if column == "created_at" {
 			return "DATE(created_at) = ?", []interface{}{value}, true
+		}
+		if set := splitFilterValues(value); len(set) > 1 {
+			return fmt.Sprintf("LOWER(%s) IN (?)", column), []interface{}{loweredValues(set)}, true
 		}
 		return fmt.Sprintf("LOWER(%s) = LOWER(?)", column), []interface{}{value}, true
 	case "not_equal_to":
 		if column == "created_at" {
 			return "DATE(created_at) <> ?", []interface{}{value}, true
+		}
+		if set := splitFilterValues(value); len(set) > 1 {
+			return fmt.Sprintf("%s IS NULL OR LOWER(%s) NOT IN (?)", column, column),
+				[]interface{}{loweredValues(set)}, true
 		}
 		return fmt.Sprintf("%s IS NULL OR LOWER(%s) <> LOWER(?)", column, column), []interface{}{value}, true
 	case "contains":

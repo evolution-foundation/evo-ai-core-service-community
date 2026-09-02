@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 
 	"evo-ai-core-service/internal/httpclient"
 	"evo-ai-core-service/internal/types"
@@ -42,6 +44,20 @@ type ServiceUnavailableError struct {
 func (e *ServiceUnavailableError) Error() string {
 	return fmt.Sprintf("Service unavailable: %s", e.Message)
 }
+
+// NotImplementedError is returned only when evo-auth answers 404 for an
+// endpoint, meaning the feature is not deployed there (as opposed to an outage).
+type NotImplementedError struct {
+	Message string
+}
+
+func (e *NotImplementedError) Error() string {
+	return fmt.Sprintf("Not implemented: %s", e.Message)
+}
+
+// AllowMissingPermissionEndpointEnv opts in to granting permissions when
+// evo-auth has no permission endpoint (404). Any other failure always denies.
+const AllowMissingPermissionEndpointEnv = "EVO_AUTH_ALLOW_MISSING_PERMISSION_ENDPOINT"
 
 // EvoAuthService interface defines all authentication and authorization operations
 type EvoAuthService interface {
@@ -81,7 +97,9 @@ func (s *evoAuthService) ValidateToken(token, tokenType string) (*types.EvoAuthV
 
 	response, err := s.doPost("/api/v1/auth/validate", map[string]interface{}{}, headers)
 	if err != nil {
-		if _, ok := err.(*NetworkError); ok {
+		var networkErr *NetworkError
+		var notImplementedErr *NotImplementedError
+		if errors.As(err, &networkErr) || errors.As(err, &notImplementedErr) {
 			return nil, &ServiceUnavailableError{Message: "Authentication service unavailable"}
 		}
 		return nil, err
@@ -144,21 +162,10 @@ func (s *evoAuthService) CheckPermission(ctx context.Context, authToken, permiss
 
 	response, err := s.doPost("/api/v1/permissions/check", payload, headers)
 	if err != nil {
-		// Check if it's a 404 (endpoint not implemented)
-		if _, ok := err.(*NetworkError); ok {
-			// Fallback: allow access for authenticated users when permission system not implemented
-			fmt.Printf("Permission endpoint not found (404) - allowing access for authenticated user (permission: %s)\n", permissionKey)
-			return true, nil
-		}
-		fmt.Printf("Permission check failed for %s: %v\n", permissionKey, err)
-		return false, nil
+		return permissionVerdictOnError(permissionKey, err)
 	}
 
-	data := response["data"].(map[string]interface{})
-
-	hasPermission, _ := data["has_permission"].(bool)
-	fmt.Printf("Permission check for %s: %v\n", permissionKey, hasPermission)
-	return hasPermission, nil
+	return permissionVerdict(permissionKey, response)
 }
 
 // CheckAccountPermission checks account-scoped permission for user
@@ -174,14 +181,10 @@ func (s *evoAuthService) CheckAccountPermission(ctx context.Context, userID, acc
 
 	response, err := s.doPost(fmt.Sprintf("/api/v1/accounts/%s/users/%s/check_permission", accountID, userID), payload, headers)
 	if err != nil {
-		fmt.Printf("Error checking account permission: %v\n", err)
-		return false, err
+		return permissionVerdictOnError(permissionKey, err)
 	}
 
-	data := response["data"].(map[string]interface{})
-
-	hasPermission, _ := data["has_permission"].(bool)
-	return hasPermission, nil
+	return permissionVerdict(permissionKey, response)
 }
 
 // CheckUserPermission checks global user permission
@@ -197,14 +200,42 @@ func (s *evoAuthService) CheckUserPermission(ctx context.Context, userID, permis
 
 	response, err := s.doPost("/api/v1/users/check_permission", payload, headers)
 	if err != nil {
-		fmt.Printf("Error checking user permission: %v\n", err)
+		return permissionVerdictOnError(permissionKey, err)
+	}
+
+	return permissionVerdict(permissionKey, response)
+}
+
+// permissionVerdictOnError fails closed: an unreachable, broken or rejecting
+// auth service never grants. The single opt-in covers a 404 (endpoint absent).
+func permissionVerdictOnError(permissionKey string, err error) (bool, error) {
+	var notImplemented *NotImplementedError
+	if errors.As(err, &notImplemented) {
+		if allowMissingPermissionEndpoint() {
+			fmt.Printf("EvoAuth: permission endpoint not implemented, granting %s because %s=true\n", permissionKey, AllowMissingPermissionEndpointEnv)
+			return true, nil
+		}
+		fmt.Printf("EvoAuth: permission endpoint not implemented, denying %s (set %s=true to allow)\n", permissionKey, AllowMissingPermissionEndpointEnv)
 		return false, err
 	}
 
-	data := response["data"].(map[string]interface{})
+	fmt.Printf("EvoAuth: permission check for %s failed, denying: %v\n", permissionKey, err)
+	return false, err
+}
+
+func permissionVerdict(permissionKey string, response map[string]interface{}) (bool, error) {
+	data, ok := response["data"].(map[string]interface{})
+	if !ok {
+		return false, fmt.Errorf("invalid permission response for %s: missing data object", permissionKey)
+	}
 
 	hasPermission, _ := data["has_permission"].(bool)
+	fmt.Printf("EvoAuth: permission check for %s: %v\n", permissionKey, hasPermission)
 	return hasPermission, nil
+}
+
+func allowMissingPermissionEndpoint() bool {
+	return os.Getenv(AllowMissingPermissionEndpointEnv) == "true"
 }
 
 // ============================================================================
@@ -227,13 +258,7 @@ func (s *evoAuthService) doGet(endpoint string, headers map[string]string) (map[
 	)
 
 	if err != nil {
-		// Check if it's a 404 error
-		if httpErr, ok := err.(interface{ StatusCode() int }); ok {
-			if httpErr.StatusCode() == 404 {
-				return nil, &NetworkError{Message: "Endpoint not found"}
-			}
-		}
-		return nil, &NetworkError{Message: fmt.Sprintf("Request failed: %v", err)}
+		return nil, classifyRequestError(err)
 	}
 
 	if result == nil {
@@ -259,18 +284,7 @@ func (s *evoAuthService) doPost(endpoint string, payload map[string]interface{},
 	)
 
 	if err != nil {
-		// Check specific error types
-		if httpErr, ok := err.(interface{ StatusCode() int }); ok {
-			statusCode := httpErr.StatusCode()
-
-			if statusCode == 404 {
-				return nil, &NetworkError{Message: "Endpoint not found"}
-			}
-			if statusCode == 401 {
-				return nil, &AuthenticationError{Message: "Invalid or expired token"}
-			}
-		}
-		return nil, &NetworkError{Message: fmt.Sprintf("Request failed: %v", err)}
+		return nil, classifyRequestError(err)
 	}
 
 	if result == nil {
@@ -278,6 +292,22 @@ func (s *evoAuthService) doPost(endpoint string, payload map[string]interface{},
 	}
 
 	return *result, nil
+}
+
+// classifyRequestError keeps transport failures and unexpected statuses as
+// NetworkError; only a 404 becomes NotImplementedError and only a 401 an
+// AuthenticationError.
+func classifyRequestError(err error) error {
+	var statusErr *httpclient.StatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.Code {
+		case http.StatusNotFound:
+			return &NotImplementedError{Message: "Endpoint not found"}
+		case http.StatusUnauthorized:
+			return &AuthenticationError{Message: "Invalid or expired token"}
+		}
+	}
+	return &NetworkError{Message: fmt.Sprintf("Request failed: %v", err)}
 }
 
 // ============================================================================

@@ -84,6 +84,33 @@ func (h *apiKeyHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 	}
 }
 
+// authorizeScopeWrite guards an update that touches the installation scope,
+// either by writing it or by targeting a credential already stored with it.
+// Returns false when the response has already been written.
+func (h *apiKeyHandler) authorizeScopeWrite(c *gin.Context, requestedScope string, id uuid.UUID) bool {
+	touchesInstallation := requestedScope == model.ScopeInstallation
+
+	if !touchesInstallation {
+		// The stored scope decides when the request omits one, and it also
+		// covers demoting an installation credential to account level.
+		//		// A failed lookup demands the privilege rather than waiving it: the cost
+		// is a 403 where a missing row would have answered 404.
+		stored, err := h.apiKeyService.GetByID(c.Request.Context(), id)
+		switch {
+		case err != nil:
+			touchesInstallation = true
+		case stored != nil:
+			touchesInstallation = stored.Scope == model.ScopeInstallation
+		}
+	}
+
+	if !touchesInstallation {
+		return true
+	}
+
+	return middleware.RequireInstallationScope(c)
+}
+
 func (h *apiKeyHandler) decryptKey(encrypted string) (string, error) {
 	fernetKey, err := fernet.DecodeKey(h.encryptionKey)
 	if err != nil {
@@ -131,6 +158,13 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// A separate privilege: this credential becomes the default every account
+	// inherits. Checked here, not on the route, because the scope is in the body.
+	scope := model.NormalizeScope(req.Scope)
+	if scope == model.ScopeInstallation && !middleware.RequireInstallationScope(c) {
+		return
+	}
+
 	encryptedKey, err := h.encryptKey(actualKey)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
@@ -141,7 +175,10 @@ func (h *apiKeyHandler) Create(c *gin.Context) {
 	apiKey := model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
+		Scope:    scope,
 		Key:      encryptedKey,
+		KeyHint:  model.DeriveKeyHint(actualKey),
+		BaseURL:  model.NormalizeBaseURL(req.BaseURL),
 	}
 
 	createdApiKey, err := h.apiKeyService.Create(c.Request.Context(), apiKey)
@@ -215,6 +252,7 @@ func (h *apiKeyHandler) List(c *gin.Context) {
 	req.Page = page
 	req.PageSize = pageSize
 	req.Active = active
+	req.Scope = c.DefaultQuery("scope", "")
 
 	listApiKeys, err := h.apiKeyService.List(c.Request.Context(), req)
 
@@ -243,28 +281,46 @@ func (h *apiKeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Validate that at least one key was provided
-	actualKey := req.GetKey()
-	if actualKey == "" {
-		code, message, httpCode := errors.HandleError(fmt.Errorf("key or key_value is required"))
-		response.ErrorResponse(c, code, message, nil, httpCode)
-		return
-	}
-
-	encryptedKey, err := h.encryptKey(actualKey)
-	if err != nil {
-		code, message, httpCode := errors.HandleError(err)
-		response.ErrorResponse(c, code, message, nil, httpCode)
-		return
-	}
-
 	apiKey := &model.ApiKey{
 		Name:     req.Name,
 		Provider: req.Provider,
-		Key:      encryptedKey,
 	}
 
-	updatedApiKey, err := h.apiKeyService.Update(c.Request.Context(), apiKey, id)
+	// An omitted scope keeps the stored one (GORM skips zero-valued fields);
+	// a provided one is normalized so no request can write an invalid scope.
+	if req.Scope != "" {
+		apiKey.Scope = model.NormalizeScope(req.Scope)
+	}
+
+	// An omitted base_url keeps the stored endpoint; an explicit one (including
+	// "", which means "back to the provider default") is written. GORM skips
+	// nil, so absence is what leaves the column alone.
+	if req.BaseURL != nil {
+		apiKey.BaseURL = model.NormalizeBaseURL(*req.BaseURL)
+		apiKey.BaseURLSet = true
+	}
+
+	// Both ways of touching the installation default need the privilege:
+	// promoting a credential into it, and editing one that already is.
+	if !h.authorizeScopeWrite(c, apiKey.Scope, id) {
+		return
+	}
+
+	// An empty key means "keep the stored one": GORM's Updates skips zero-valued
+	// struct fields, so Key and KeyHint stay untouched.
+	if actualKey := req.GetKey(); actualKey != "" {
+		encryptedKey, err := h.encryptKey(actualKey)
+		if err != nil {
+			code, message, httpCode := errors.HandleError(err)
+			response.ErrorResponse(c, code, message, nil, httpCode)
+			return
+		}
+
+		apiKey.Key = encryptedKey
+		apiKey.KeyHint = model.DeriveKeyHint(actualKey)
+	}
+
+	updatedApiKey, err := h.apiKeyService.Update(c.Request.Context(), apiKey, req.IsActive, id)
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
@@ -332,8 +388,13 @@ func (h *apiKeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	_, err = h.apiKeyService.Delete(c.Request.Context(), id)
-	if err != nil {
+	// Deleting the installation default is a write to it: same privilege as
+	// creating or editing one.
+	if !h.authorizeScopeWrite(c, "", id) {
+		return
+	}
+
+	if err := h.apiKeyService.Delete(c.Request.Context(), id); err != nil {
 		code, message, httpCode := errors.HandleError(err)
 		response.ErrorResponse(c, code, message, nil, httpCode)
 		return

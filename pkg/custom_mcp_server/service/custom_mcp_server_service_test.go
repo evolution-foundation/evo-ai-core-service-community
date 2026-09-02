@@ -145,6 +145,75 @@ func TestTestConnection_DelegatesToProcessor(t *testing.T) {
 	}
 }
 
+// EVO-1739: the public TestConnection wrapper (test-before-save) must delegate to the
+// same processor handshake and surface the TestResult unchanged.
+func TestTestConnection_PublicWrapper_DelegatesAndReturnsResult(t *testing.T) {
+	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"response_time":0.1,"url_tested":"https://mcp.example/mcp","message":"ok","tools_count":2}`)
+	svc := newServiceForTest(cs.URL)
+	ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+	result, err := svc.TestConnection(ctx, "https://mcp.example/mcp", map[string]string{})
+	if err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if want := "/api/v1/custom-mcp-servers/test-connection"; cs.gotPath != want {
+		t.Fatalf("path: got %q want %q", cs.gotPath, want)
+	}
+	if !result.Success || result.StatusCode != http.StatusOK {
+		t.Fatalf("want success 200, got success=%v code=%d", result.Success, result.StatusCode)
+	}
+}
+
+// EVO-1739: bad schemes and hostless urls are rejected before any request goes out —
+// asserted by the processor stub never being hit.
+func TestTestConnection_RejectsNonHTTPURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"empty", ""},
+		{"blank", "   "},
+		{"file scheme", "file:///etc/passwd"},
+		{"gopher scheme", "gopher://internal:70/_dict"},
+		{"no scheme", "mcp.example/mcp"},
+		{"scheme without host", "http:///mcp"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":0}`)
+			svc := newServiceForTest(cs.URL)
+			ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+			result, err := svc.TestConnection(ctx, tc.url, map[string]string{})
+			if err == nil {
+				t.Fatalf("TestConnection(%q): want a validation error, got result %+v", tc.url, result)
+			}
+			if result != nil {
+				t.Fatalf("TestConnection(%q): want nil result alongside the error, got %+v", tc.url, result)
+			}
+			if cs.gotPath != "" {
+				t.Fatalf("TestConnection(%q): processor was called at %q — the url must be rejected before any outbound request", tc.url, cs.gotPath)
+			}
+		})
+	}
+}
+
+// EVO-1739: guards against the validation degrading into a private-IP blocklist —
+// self-hosted MCP servers routinely sit on the same private network.
+func TestTestConnection_AllowsPlainHTTPAndPrivateHosts(t *testing.T) {
+	cs := newCaptureTestServer(t, `{"success":true,"status_code":200,"tools_count":1}`)
+	svc := newServiceForTest(cs.URL)
+	ctx := context.WithValue(context.Background(), "token", "tok-abc")
+
+	if _, err := svc.TestConnection(ctx, "http://mcp.internal:8080/mcp", map[string]string{}); err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if cs.gotPath == "" {
+		t.Fatal("processor was not called for a valid private-network http URL")
+	}
+}
+
 // The test call propagates X-Evo-Tenant-Id too, so the processor can
 // authorize it. Parity with TestDiscoverTools_PropagatesTenantHeader_WhenBound.
 func TestTestConnection_PropagatesTenantHeader_WhenBound(t *testing.T) {

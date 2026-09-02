@@ -2,20 +2,20 @@ package service
 
 import (
 	"context"
-	"errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/pkg/api_key/model"
 	"evo-ai-core-service/pkg/api_key/repository"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type ApiKeyService interface {
 	Create(ctx context.Context, request model.ApiKey) (*model.ApiKey, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ApiKey, error)
 	List(ctx context.Context, request model.ApiKeyListRequest) (*model.ApiKeyListResponse, error)
-	Update(ctx context.Context, request *model.ApiKey, id uuid.UUID) (*model.ApiKey, error)
-	Delete(ctx context.Context, id uuid.UUID) (bool, error)
+	Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 type apiKeyService struct {
@@ -56,7 +56,7 @@ func (s *apiKeyService) List(ctx context.Context, request model.ApiKeyListReques
 	}
 
 	// Get total count
-	totalItems, err := s.apiKeyRepository.Count(ctx, request.Active)
+	totalItems, err := s.apiKeyRepository.Count(ctx, request.Active, request.Scope)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.APIKeyErrors)
 	}
@@ -83,14 +83,12 @@ func (s *apiKeyService) List(ctx context.Context, request model.ApiKeyListReques
 	}, nil
 }
 
-func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, id uuid.UUID) (*model.ApiKey, error) {
-	_, err := s.GetByID(ctx, id)
-
-	if err != nil {
-		return nil, errors.New("API key not found")
+func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, isActive *bool, id uuid.UUID) (*model.ApiKey, error) {
+	if _, err := s.GetByID(ctx, id); err != nil {
+		return nil, err
 	}
 
-	apiKey, err := s.apiKeyRepository.Update(ctx, request, id)
+	apiKey, err := s.apiKeyRepository.Update(ctx, request, isActive, id)
 
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.APIKeyErrors)
@@ -99,18 +97,24 @@ func (s *apiKeyService) Update(ctx context.Context, request *model.ApiKey, id uu
 	return apiKey, nil
 }
 
-func (s *apiKeyService) Delete(ctx context.Context, id uuid.UUID) (bool, error) {
-	_, err := s.GetByID(ctx, id)
-
-	if err != nil {
-		return false, errors.New("API key not found")
+// Delete reports only failure: a nil error means the row is gone. Anything
+// else — unknown id, or deleted between the read and the delete — is the
+// mapped 404, never a silent success.
+func (s *apiKeyService) Delete(ctx context.Context, id uuid.UUID) error {
+	// GetByID already maps a missing row to the 404 error; wrapping it in a
+	// plain error used to surface as 500.
+	if _, err := s.GetByID(ctx, id); err != nil {
+		return err
 	}
 
 	deleted, err := s.apiKeyRepository.Delete(ctx, id)
-
 	if err != nil {
-		return false, errorsPostgres.MapDBError(err, model.APIKeyErrors)
+		return errorsPostgres.MapDBError(err, model.APIKeyErrors)
 	}
 
-	return deleted, nil
+	if !deleted {
+		return errorsPostgres.MapDBError(gorm.ErrRecordNotFound, model.APIKeyErrors)
+	}
+
+	return nil
 }

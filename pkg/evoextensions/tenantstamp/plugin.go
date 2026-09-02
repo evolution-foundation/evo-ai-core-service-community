@@ -53,14 +53,12 @@ var schemalessTenantTables = map[string]struct{}{
 // struct, então o `stamp` já carimba o VALOR — MAS a policy WITH CHECK exige que o
 // tenant_id BATA com o GUC app.current_tenant_id da CONEXÃO. O struct-write roda no pool
 // global (GUC vazio) → a policy fail-closed rejeita com 42501 ("new row violates RLS").
-//
-// FIX (o "paired change" que a migration exigia): rotear TAMBÉM o INSERT dessas 8 para a
+// // FIX (o "paired change" que a migration exigia): rotear TAMBÉM o INSERT dessas 8 para a
 // conexão scope-bound (com GUC setado pelo Authorizer), igual ao agent_bots. Aí o valor
 // carimbado bate com o GUC → WITH CHECK passa. O reroute roda ANTES do begin_transaction
 // (evita o double-commit 500). O stamp-por-valor continua (belt+suspenders). Sem este
 // reroute, criar agente/api-key/folder/tool/mcp dava HTTP 500 "Database error".
-//
-// Fonte da lista: as tabelas com policy USING sem `IS NULL` (pg_policy) = as 8 apertadas.
+// // Fonte da lista: as tabelas com policy USING sem `IS NULL` (pg_policy) = as 8 apertadas.
 var tenantScopedWriteTables = map[string]struct{}{
 	"evo_core_agents":             {},
 	"evo_core_api_keys":           {},
@@ -70,6 +68,12 @@ var tenantScopedWriteTables = map[string]struct{}{
 	"evo_core_mcp_servers":        {},
 	"evo_core_custom_mcp_servers": {},
 	"evo_core_agent_integrations": {},
+	// Ships with the vault table (story 2.1). The entry only takes effect under
+	// `-tags=enterprise`, where this plugin is registered, and it PAIRS with the
+	// gem migration that adds tenant_id + the tight RLS policy to the table:
+	// the list means "tables whose policy USING has no `IS NULL`", so both must
+	// land in the same release for the invariant above to keep holding.
+	"evo_core_integration_credentials": {},
 }
 
 // callbackName must be unique across registered Create callbacks.
@@ -103,25 +107,25 @@ type Plugin struct{}
 func (Plugin) Name() string { return callbackName }
 
 // Initialize registers the reroute + value-stamp callbacks:
+// //  1. evo:tenant_reroute — Create.Before("gorm:begin_transaction"):
 //
-//  1. evo:tenant_reroute — Create.Before("gorm:begin_transaction"):
-//     reroutes ConnPool onto the scope-bound tx BEFORE GORM's default
-//     transaction begins, so GORM's auto-tx becomes a swallowed no-op
-//     instead of committing our request-scoped tx early (see
-//     routeScopedTenantWrite).
-//  2. evo:tenant_reroute_update / evo:tenant_reroute_delete —
-//     Update/Delete.Before("gorm:begin_transaction"): the SAME reroute
-//     on the Update and Delete chains. Sem eles, UPDATE/DELETE das 8
-//     tabelas fail-closed rodava no pool com GUC vazio e batia 0 linhas
-//     silenciosamente (a edição de agente nunca persistia). O reroute é
-//     table-based e agnóstico à operação, então o mesmo callback serve
-//     Create/Update/Delete.
-//  3. evo:tenant_stamp — Create.Before("gorm:create"): stamps the
-//     tenant_id VALUE on models that declare the column (the normal
-//     path). Só no Create: o UPDATE não re-carimba tenant_id (a linha já
-//     tem o valor; o reroute basta para a policy WITH CHECK/USING casar).
+//	   reroutes ConnPool onto the scope-bound tx BEFORE GORM's default
+//	   transaction begins, so GORM's auto-tx becomes a swallowed no-op
+//	   instead of committing our request-scoped tx early (see
+//	   routeScopedTenantWrite).
+//	2. evo:tenant_reroute_update / evo:tenant_reroute_delete —
+//	   Update/Delete.Before("gorm:begin_transaction"): the SAME reroute
+//	   on the Update and Delete chains. Sem eles, UPDATE/DELETE das 8
+//	   tabelas fail-closed rodava no pool com GUC vazio e batia 0 linhas
+//	   silenciosamente (a edição de agente nunca persistia). O reroute é
+//	   table-based e agnóstico à operação, então o mesmo callback serve
+//	   Create/Update/Delete.
+//	3. evo:tenant_stamp — Create.Before("gorm:create"): stamps the
+//	   tenant_id VALUE on models that declare the column (the normal
+//	   path). Só no Create: o UPDATE não re-carimba tenant_id (a linha já
+//	   tem o valor; o reroute basta para a policy WITH CHECK/USING casar).
 //
-// They are split so the normal value-stamp path keeps running at its
+// // They are split so the normal value-stamp path keeps running at its
 // proven position and each reroute fires at the only point where it is
 // correct (before begin_transaction).
 func (Plugin) Initialize(db *gorm.DB) error {
@@ -140,16 +144,16 @@ func (Plugin) Initialize(db *gorm.DB) error {
 // rerouteSchemaless is the reroute-only callback (Before begin_transaction).
 // It reroutes the INSERT onto the request-scoped, GUC-carrying connection for
 // TWO classes of table:
+// //  1. the schemaless allowlist (agent_bots) — a struct WITHOUT a tenant_id
 //
-//  1. the schemaless allowlist (agent_bots) — a struct WITHOUT a tenant_id
-//     field whose table HAS the column; the DB DEFAULT reads the GUC; and
-//  2. the tenantScopedWriteTables (the 8 evo_core_* tables) — structs that DO
-//     declare tenant_id (so `stamp` value-stamps them at gorm:create) but whose
-//     RLS was tightened to FAIL-CLOSED. A fail-closed WITH CHECK requires the
-//     stamped tenant_id to MATCH the connection's GUC, so the INSERT must run on
-//     the GUC-carrying conn — not the bare pool — or Postgres rejects it (42501).
+//	   field whose table HAS the column; the DB DEFAULT reads the GUC; and
+//	2. the tenantScopedWriteTables (the 8 evo_core_* tables) — structs that DO
+//	   declare tenant_id (so `stamp` value-stamps them at gorm:create) but whose
+//	   RLS was tightened to FAIL-CLOSED. A fail-closed WITH CHECK requires the
+//	   stamped tenant_id to MATCH the connection's GUC, so the INSERT must run on
+//	   the GUC-carrying conn — not the bare pool — or Postgres rejects it (42501).
 //
-// For every other model this is a no-op (the value stamper in `stamp` handles
+// // For every other model this is a no-op (the value stamper in `stamp` handles
 // those at gorm:create, on the pool, with a fail-OPEN policy that tolerates
 // GUC-less writes). See routeScopedTenantWrite for the reroute mechanics.
 func rerouteSchemaless(db *gorm.DB) {
@@ -223,33 +227,32 @@ func stamp(db *gorm.DB) {
 // conexão scope-bound publicada pela camada enterprise (runtimecontext.ConnFromContext)
 // — a tx onde o Authorizer fez set_config('app.current_tenant_id', tid, is_local).
 // São DOIS allowlists com propósitos distintos, mas o MESMO reroute serve ambos:
+// //   - schemalessTenantTables (agent_bots): o struct NÃO tem tenant_id, então quem
 //
-//   - schemalessTenantTables (agent_bots): o struct NÃO tem tenant_id, então quem
-//     resolve o tenant é o DEFAULT da coluna (migration do gem), que lê o GUC. Sem a
-//     conn com GUC, o DEFAULT viria NULL → NOT NULL violation / row órfã.
-//   - tenantScopedWriteTables (os 8 evo_core_*): o struct TEM tenant_id e o `stamp`
-//     já carimba o VALOR — mas a RLS foi apertada p/ FAIL-CLOSED (WITH CHECK exige
-//     tenant_id = GUC da conn). No pool o GUC é vazio → 42501. Roteando p/ a conn
-//     scope-bound, o valor carimbado bate com o GUC → WITH CHECK passa. (Este é o
-//     "paired change" que a migration 20260630000001 exigia p/ não dar HTTP 500.)
+//	  resolve o tenant é o DEFAULT da coluna (migration do gem), que lê o GUC. Sem a
+//	  conn com GUC, o DEFAULT viria NULL → NOT NULL violation / row órfã.
+//	- tenantScopedWriteTables (os 8 evo_core_*): o struct TEM tenant_id e o `stamp`
+//	  já carimba o VALOR — mas a RLS foi apertada p/ FAIL-CLOSED (WITH CHECK exige
+//	  tenant_id = GUC da conn). No pool o GUC é vazio → 42501. Roteando p/ a conn
+//	  scope-bound, o valor carimbado bate com o GUC → WITH CHECK passa. (Este é o
+//	  "paired change" que a migration 20260630000001 exigia p/ não dar HTTP 500.)
 //
-// Nessa tx o struct-create segue intacto (RETURNING id popula X.ID). É o simétrico de
+// // Nessa tx o struct-create segue intacto (RETURNING id popula X.ID). É o simétrico de
 // WRITE do tenantscope (que roteia os reads). FAIL-CLOSED: tabela do allowlist sem
 // tenant no ctx OU sem conn scope-bound → ABORTA (não insere no pool com GUC vazio, o
 // que gravaria a row sem tenant, violaria NOT NULL, ou bateria na RLS). Tabelas fora
 // dos allowlists: no-op (seguem o value-stamp path no pool, com policy fail-open).
-//
-// POR QUE Before("gorm:begin_transaction") E NÃO Before("gorm:create"):
+// // POR QUE Before("gorm:begin_transaction") E NÃO Before("gorm:create"):
 // o GORM tem SkipDefaultTransaction=false, então envolve cada Create numa tx
-// própria: gorm:begin_transaction (db.Begin() no pool → abre uma tx nova "gormTx",
+// própria: gorm:begin_transaction (db.Begin no pool → abre uma tx nova "gormTx",
 // seta gorm:started_transaction) ... gorm:commit_or_rollback_transaction
-// (db.Commit() na ConnPool atual). Se o reroute rodasse DEPOIS do begin (em
+// (db.Commit na ConnPool atual). Se o reroute rodasse DEPOIS do begin (em
 // gorm:create), a ConnPool no commit já seria a NOSSA tx scope-bound → o GORM
-// daria Commit() nela cedo demais, e o release(true)→tx.Commit() do request
+// daria Commit nela cedo demais, e o release(true)→tx.Commit do request
 // estouraria "transaction has already been committed" (HTTP 500), além de vazar
 // a gormTx órfã. Roteando ANTES do begin, a ConnPool já é a *sql.Tx scope-bound
-// quando db.Begin() roda: *sql.Tx não satisfaz TxBeginner/ConnPoolBeginner, então
-// Begin() cai no default→ErrInvalidTransaction, que o BeginTransaction ENGOLE
+// quando db.Begin roda: *sql.Tx não satisfaz TxBeginner/ConnPoolBeginner, então
+// Begin cai no default→ErrInvalidTransaction, que o BeginTransaction ENGOLE
 // (tx.Error=nil) e NÃO seta gorm:started_transaction → commit_or_rollback vira
 // no-op. Sem tx órfã, sem commit prematuro: o request commita uma vez só, no
 // release. (Verificado em gorm@v1.30.0: finisher_api.go DB.Begin switch +
@@ -295,7 +298,7 @@ func setIfZero(db *gorm.DB, field *schema.Field, elem reflect.Value, parsed uuid
 // stampMap handles the map[string]interface{} Create path. GORM allows
 // `db.Model(&X{}).Create(map[string]interface{}{...})` for ad-hoc
 // inserts; the struct-based stamper above never sees those rows because
-// ReflectValue.Kind() is reflect.Map. We mirror setIfZero's "don't
+// ReflectValue.Kind is reflect.Map. We mirror setIfZero's "don't
 // clobber" rule: only set the key when it's absent or empty.
 func stampMap(db *gorm.DB, m reflect.Value, parsed uuid.UUID) {
 	if !m.IsValid() || m.IsNil() {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"evo-ai-core-service/internal/config"
 	"evo-ai-core-service/internal/httpclient"
+	apierrors "evo-ai-core-service/internal/httpclient/errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/contextutils"
 	"evo-ai-core-service/internal/utils/stringutils"
@@ -14,6 +15,8 @@ import (
 	"evo-ai-core-service/pkg/evoextensions/runtimecontext"
 	"fmt"
 	"net/http"
+	neturl "net/url"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -26,6 +29,9 @@ type CustomMcpServerService interface {
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	GetByAgentConfig(ctx context.Context, serverIDs []uuid.UUID) ([]*model.CustomMcpServer, error)
 	Test(ctx context.Context, id uuid.UUID) (*model.CustomMcpServerTestResponse, error)
+	// EVO-1739: stateless test of an UNSAVED server's url/headers, so the wizard can
+	// "test before save". Reuses the same processor MCP handshake as Test.
+	TestConnection(ctx context.Context, url string, headers map[string]string) (*model.TestResult, error)
 }
 
 type customMcpServerService struct {
@@ -164,9 +170,13 @@ func (s *customMcpServerService) discoverTools(ctx context.Context, request mode
 	tools, err := httpclient.DoPostJSON[model.CustomMcpServerToolsResponse](
 		ctx,
 		fmt.Sprintf("%s/api/%s/custom-mcp-servers/discover-tools", s.cfgAIProcessorService.URL, s.cfgAIProcessorService.Version),
+		// The vault references travel instead of the resolved values: the
+		// processor reads the secret itself, so a plaintext credential no
+		// longer crosses the service boundary in a JSON body .
 		map[string]interface{}{
-			"url":     request.URL,
-			"headers": stringutils.JSONToStringMap(request.Headers),
+			"url":             request.URL,
+			"headers":         stringutils.JSONToStringMap(request.Headers),
+			"credential_refs": stringutils.JSONToStringMap(request.CredentialRefs),
 		},
 		headers,
 		http.StatusOK,
@@ -203,6 +213,38 @@ func (s *customMcpServerService) Test(ctx context.Context, id uuid.UUID) (*model
 		Server:     customMcpServer.ToResponse(),
 		TestResult: testResult,
 	}, nil
+}
+
+// TestConnection runs the MCP handshake against arbitrary url/headers without a saved
+// server — powers the wizard's "test before save" (EVO-1739).
+func (s *customMcpServerService) TestConnection(ctx context.Context, rawURL string, headers map[string]string) (*model.TestResult, error) {
+	if err := validateTestConnectionURL(rawURL); err != nil {
+		return nil, err
+	}
+	return s.testConnection(ctx, rawURL, headers)
+}
+
+// validateTestConnectionURL requires an absolute http/https url with a host, since the
+// caller supplies it and the processor dials it. No private/loopback blocklist: a
+// self-hosted Evolution normally runs its MCP servers on the same private network.
+func validateTestConnectionURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return apierrors.New(apierrors.ValidationError, "url is required", http.StatusBadRequest)
+	}
+
+	parsed, err := neturl.Parse(trimmed)
+	if err != nil {
+		return apierrors.New(apierrors.ValidationError, "url is not a valid URL", http.StatusBadRequest)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return apierrors.New(apierrors.ValidationError, "url must use the http or https scheme", http.StatusBadRequest)
+	}
+	if parsed.Host == "" {
+		return apierrors.New(apierrors.ValidationError, "url must include a host", http.StatusBadRequest)
+	}
+
+	return nil
 }
 
 // EVO-2139: delegate the MCP connection test to the processor, which owns

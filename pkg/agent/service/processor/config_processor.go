@@ -95,8 +95,11 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		}
 	}
 
-	if preload, ok := agentConfig["preload_memory"].(bool); ok && preload {
-		if load, ok := agentConfig["load_memory"].(bool); !ok || !load {
+	// Validated over the EFFECTIVE view (request key wins, stored key fills in):
+	// a request that only flips preload_memory on must see the load_memory the
+	// agent already carries, or a valid partial update is rejected.
+	if preload, ok := effectiveValue(agentConfig, existingConfig, "preload_memory").(bool); ok && preload {
+		if load, ok := effectiveValue(agentConfig, existingConfig, "load_memory").(bool); !ok || !load {
 			return fmt.Errorf("preload_memory requires load_memory to be enabled")
 		}
 	}
@@ -133,9 +136,10 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		processedConfig["tools"] = processedTools
 	}
 
-	// Validate external agent provider if type is external
+	// Validate external agent provider if type is external. Effective view: an
+	// update that doesn't resend `provider` keeps (and revalidates) the stored one.
 	if agent.Type == "external" {
-		provider, ok := agentConfig["provider"].(string)
+		provider, ok := effectiveValue(agentConfig, existingConfig, "provider").(string)
 		if !ok || provider == "" {
 			return fmt.Errorf("provider is required for external type agents")
 		}
@@ -154,7 +158,41 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 		processedConfig["provider"] = provider
 	}
 
+	// CRM-305 — on update, a key the request did not send keeps its stored value.
+	// Backfilled as stored, not re-run through the pipeline: re-resolving stored
+	// mcp_servers would fail an unrelated toggle update if a server left the catalog.
+	if existingConfig != nil {
+		for key, value := range existingConfig {
+			// The request owns every key it sent, explicit null included — even one
+			// the commonFields allowlist kept out of processedConfig.
+			if _, sent := agentConfig[key]; sent {
+				continue
+			}
+			// api_key may already hold a key generated because the stored one was empty.
+			if _, processed := processedConfig[key]; processed {
+				continue
+			}
+			// provider off an external agent is stale: nothing validates it anymore.
+			if key == "provider" && agent.Type != "external" {
+				continue
+			}
+			processedConfig[key] = value
+		}
+	}
+
 	return config.UpdateConfig(agent, processedConfig)
+}
+
+// effectiveValue is the value the persisted config will end up with for key:
+// the request's when sent, the stored one otherwise (nil outside an update).
+func effectiveValue(requestConfig, existingConfig map[string]interface{}, key string) interface{} {
+	if value, ok := requestConfig[key]; ok {
+		return value
+	}
+	if existingConfig != nil {
+		return existingConfig[key]
+	}
+	return nil
 }
 
 func (p ConfigProcessor) validateOutputSchema(schema interface{}) error {
@@ -268,18 +306,39 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 			return nil, fmt.Errorf("server environments must be a dictionary")
 		}
 
+		// An env var whose value lives in the vault is referenced by name here
+		// (credential_refs: {ENV_NAME: credential id}). The runtime resolves it;
+		// this service only carries the reference.
+		credentialRefs, _ := serverMap["credential_refs"].(map[string]interface{})
+
 		mcpServerResponse := mcpServer.ToResponse()
 		for envKey := range mcpServerResponse.Environments {
-			if _, exists := environments[envKey]; !exists {
-				return nil, fmt.Errorf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
+			if _, exists := environments[envKey]; exists {
+				continue
 			}
+			// A required key satisfied by a vault reference is provided, just
+			// not inline: demanding a plaintext value here would make the vault
+			// unusable for exactly the secrets it exists to hold.
+			if _, referenced := credentialRefs[envKey]; referenced {
+				continue
+			}
+			return nil, fmt.Errorf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
 		}
 
-		processedServers = append(processedServers, map[string]interface{}{
+		processed := map[string]interface{}{
 			"id":           serverID,
 			"environments": serverMap["environments"],
 			"tools":        serverMap["tools"],
-		})
+		}
+
+		// Carried ONLY when present: this allowlist is what reaches the agent
+		// config, so a field left out here is silently dropped and the runtime
+		// resolution downstream never sees a reference to resolve.
+		if len(credentialRefs) > 0 {
+			processed["credential_refs"] = credentialRefs
+		}
+
+		processedServers = append(processedServers, processed)
 	}
 
 	return processedServers, nil

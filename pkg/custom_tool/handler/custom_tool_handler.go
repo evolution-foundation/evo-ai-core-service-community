@@ -7,6 +7,7 @@ import (
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/custom_tool/model"
 	"evo-ai-core-service/pkg/custom_tool/service"
+	"evo-ai-core-service/pkg/evoextensions/secretmerge"
 	"net/http"
 	"regexp"
 	"sort"
@@ -25,6 +26,7 @@ type CustomToolHandler interface {
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
 	Test(c *gin.Context)
+	TestPayload(c *gin.Context)
 }
 
 // customToolHandler implements the CustomToolHandler interface.
@@ -75,6 +77,14 @@ func (h *customToolHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 			permissionMiddleware.RequirePermission("ai_custom_tools", "delete"),
 			h.Delete)
 
+		// EVO-1738: stateless test-before-save (validates the payload typed in the wizard).
+		// Gated on "create", NOT "read": unlike GET /:id/test — which only replays a tool
+		// someone with create rights already authored — this takes method/endpoint/headers
+		// straight from the request body, so a read-only user would otherwise gain an
+		// arbitrary server-side HTTP fetcher (our egress, our IP, our network position).
+		customTools.POST("/test",
+			permissionMiddleware.RequirePermission("ai_custom_tools", "create"),
+			h.TestPayload)
 		// Test permissions
 		customTools.GET("/:id/test",
 			permissionMiddleware.RequirePermission("ai_custom_tools", "read"),
@@ -91,20 +101,21 @@ func (h *customToolHandler) Create(c *gin.Context) {
 	}
 
 	customTools := model.CustomTool{
-		Name:          req.Name,
-		Description:   req.Description,
-		Method:        req.Method,
-		Endpoint:      req.Endpoint,
-		Headers:       stringutils.StringMapToJSON(req.Headers),
-		PathParams:    stringutils.StringMapToJSON(req.PathParams),
-		QueryParams:   stringutils.InterfaceMapToJSON(req.QueryParams),
-		BodyParams:    stringutils.InterfaceMapToJSON(req.BodyParams),
-		ErrorHandling: stringutils.InterfaceMapToJSON(req.ErrorHandling),
-		Values:        stringutils.InterfaceMapToJSON(req.Values),
-		Tags:          req.Tags,
-		Examples:      req.Examples,
-		InputModes:    req.InputModes,
-		OutputModes:   req.OutputModes,
+		Name:           req.Name,
+		Description:    req.Description,
+		Method:         req.Method,
+		Endpoint:       req.Endpoint,
+		Headers:        stringutils.StringMapToJSON(req.Headers),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		PathParams:     stringutils.StringMapToJSON(req.PathParams),
+		QueryParams:    stringutils.InterfaceMapToJSON(req.QueryParams),
+		BodyParams:     stringutils.InterfaceMapToJSON(req.BodyParams),
+		ErrorHandling:  stringutils.InterfaceMapToJSON(req.ErrorHandling),
+		Values:         stringutils.InterfaceMapToJSON(req.Values),
+		Tags:           req.Tags,
+		Examples:       req.Examples,
+		InputModes:     req.InputModes,
+		OutputModes:    req.OutputModes,
 	}
 
 	createdCustomTools, err := h.customToolService.Create(c.Request.Context(), customTools)
@@ -258,21 +269,31 @@ func (h *customToolHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// The response no longer returns header VALUES, so a screen saving the
+	// object it received sends them back empty or absent. Without this merge the
+	// wholesale update would erase the stored secret (same defect story 2.3 fixed
+	// on agent integrations).
+	mergedHeaders := req.Headers
+	if stored, err := h.customToolService.GetByID(c.Request.Context(), id); err == nil && stored != nil {
+		mergedHeaders = secretmerge.KeepMissing(req.Headers, stringutils.JSONToStringMap(stored.Headers))
+	}
+
 	customTools := &model.CustomTool{
-		Name:          req.Name,
-		Description:   req.Description,
-		Method:        req.Method,
-		Endpoint:      req.Endpoint,
-		Headers:       stringutils.StringMapToJSON(req.Headers),
-		PathParams:    stringutils.StringMapToJSON(req.PathParams),
-		QueryParams:   stringutils.InterfaceMapToJSON(req.QueryParams),
-		BodyParams:    stringutils.InterfaceMapToJSON(req.BodyParams),
-		ErrorHandling: stringutils.InterfaceMapToJSON(req.ErrorHandling),
-		Values:        stringutils.InterfaceMapToJSON(req.Values),
-		Tags:          req.Tags,
-		Examples:      req.Examples,
-		InputModes:    req.InputModes,
-		OutputModes:   req.OutputModes,
+		Name:           req.Name,
+		Description:    req.Description,
+		Method:         req.Method,
+		Endpoint:       req.Endpoint,
+		Headers:        stringutils.StringMapToJSON(mergedHeaders),
+		CredentialRefs: stringutils.StringMapToJSON(req.CredentialRefs),
+		PathParams:     stringutils.StringMapToJSON(req.PathParams),
+		QueryParams:    stringutils.InterfaceMapToJSON(req.QueryParams),
+		BodyParams:     stringutils.InterfaceMapToJSON(req.BodyParams),
+		ErrorHandling:  stringutils.InterfaceMapToJSON(req.ErrorHandling),
+		Values:         stringutils.InterfaceMapToJSON(req.Values),
+		Tags:           req.Tags,
+		Examples:       req.Examples,
+		InputModes:     req.InputModes,
+		OutputModes:    req.OutputModes,
 	}
 
 	updatedCustomTools, err := h.customToolService.Update(c.Request.Context(), customTools, id)
@@ -322,4 +343,22 @@ func (h *customToolHandler) Test(c *gin.Context) {
 	}
 
 	response.SuccessResponse(c, customTool, "Custom tool test completed successfully", http.StatusOK)
+}
+
+// TestPayload tests an UNSAVED tool payload (test-before-save). EVO-1738.
+func (h *customToolHandler) TestPayload(c *gin.Context) {
+	var req model.CustomToolTestPayloadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ValidationErrorResponse(c, err)
+		return
+	}
+
+	testResult, err := h.customToolService.TestPayload(c.Request.Context(), req)
+	if err != nil {
+		code, message, httpCode := errors.HandleError(err)
+		response.ErrorResponse(c, code, message, nil, httpCode)
+		return
+	}
+
+	response.SuccessResponse(c, gin.H{"test_result": testResult}, "Custom tool test completed successfully", http.StatusOK)
 }
