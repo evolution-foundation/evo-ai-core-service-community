@@ -580,3 +580,69 @@ func TestResolveToolURL_PlaceholderCannotInjectAHost(t *testing.T) {
 		}
 	})
 }
+
+// CRM-527: body params are stored as {type, required, description} — the
+// declaration of what the AI will send. Posting that declaration made the Test
+// button report on a request no agent ever makes.
+func TestRunToolTest_SchemaBodyParamsAreSentAsSampleValues(t *testing.T) {
+	var received map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	body := map[string]interface{}{
+		"queryText": map[string]interface{}{"type": "string", "required": true, "description": "q"},
+		"topK":      map[string]interface{}{"type": "number", "required": false, "description": "n"},
+		"deep":      map[string]interface{}{"type": "boolean", "required": true, "description": ""},
+	}
+
+	if res := runToolTest(context.Background(), http.MethodPost, srv.URL, nil, body); !res.Success {
+		t.Fatalf("expected success, got %+v", res)
+	}
+
+	if got, want := received["queryText"], "string"; got != want {
+		t.Errorf("queryText = %#v, want %#v", got, want)
+	}
+	if got, want := received["topK"], float64(0); got != want {
+		t.Errorf("topK = %#v, want %#v", got, want)
+	}
+	if got, want := received["deep"], false; got != want {
+		t.Errorf("deep = %#v, want %#v", got, want)
+	}
+}
+
+// A literal body the user typed is not a schema and must reach the endpoint
+// untouched — including an object that happens to carry a `type` key.
+func TestRunToolTest_LiteralBodyParamsAreSentVerbatim(t *testing.T) {
+	var received map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	body := map[string]interface{}{
+		"legacy": "{query}",
+		"filter": map[string]interface{}{"type": "premium", "since": "2026-01-01"},
+		"limit":  float64(10),
+	}
+
+	if res := runToolTest(context.Background(), http.MethodPost, srv.URL, nil, body); !res.Success {
+		t.Fatalf("expected success, got %+v", res)
+	}
+
+	if got, want := received["legacy"], "{query}"; got != want {
+		t.Errorf("legacy = %#v, want %#v", got, want)
+	}
+	filter, ok := received["filter"].(map[string]interface{})
+	if !ok || filter["type"] != "premium" || filter["since"] != "2026-01-01" {
+		t.Errorf("filter = %#v, want the literal object", received["filter"])
+	}
+	if got, want := received["limit"], float64(10); got != want {
+		t.Errorf("limit = %#v, want %#v", got, want)
+	}
+}
