@@ -213,6 +213,65 @@ func resolveToolURL(endpoint string, pathParams map[string]string, queryParams m
 	return u.String()
 }
 
+// bodyParamSchemaFields are the only keys a body param SCHEMA carries. A stored
+// object with anything else in it is a literal body value, not a declaration.
+var bodyParamSchemaFields = map[string]struct{}{
+	"type": {}, "required": {}, "description": {}, "element_type": {},
+}
+
+// bodyParamSample returns a value of the declared type, and whether `raw` was a
+// body param schema at all. A schema describes what the AI will send at run
+// time ({type, required, description}); posting the description object itself
+// is what made the Test button report on a request no agent ever makes
+// (CRM-527).
+func bodyParamSample(raw interface{}) (interface{}, bool) {
+	schema, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	for field := range schema {
+		if _, known := bodyParamSchemaFields[field]; !known {
+			return nil, false
+		}
+	}
+	declared, ok := schema["type"].(string)
+	if !ok {
+		return nil, false
+	}
+	switch declared {
+	case "string":
+		return "string", true
+	case "number":
+		return float64(0), true
+	case "integer":
+		return 0, true
+	case "boolean":
+		return false, true
+	case "object":
+		return map[string]interface{}{}, true
+	case "array":
+		return []interface{}{}, true
+	default:
+		return nil, false
+	}
+}
+
+// sampleBodyFromParams replaces every body param schema with a sample of its
+// declared type. Anything that is not a schema — a constant the user typed, a
+// legacy string — is sent verbatim, so the test keeps matching what the tool
+// stores.
+func sampleBodyFromParams(bodyParams map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(bodyParams))
+	for name, raw := range bodyParams {
+		if sample, ok := bodyParamSample(raw); ok {
+			out[name] = sample
+			continue
+		}
+		out[name] = raw
+	}
+	return out
+}
+
 // runToolTest issues the HTTP request described by the tool and returns a
 // TestResult reflecting what actually happened: real status code, response
 // time, headers, body. Success = HTTP 2xx (not body parseability).
@@ -235,7 +294,7 @@ func runToolTest(
 	var bodyReader io.Reader
 	hasBody := len(bodyParams) > 0 && (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch)
 	if hasBody {
-		buf, marshalErr := json.Marshal(bodyParams)
+		buf, marshalErr := json.Marshal(sampleBodyFromParams(bodyParams))
 		if marshalErr != nil {
 			result.Error = fmt.Sprintf("falha ao serializar body: %v", marshalErr)
 			return result
