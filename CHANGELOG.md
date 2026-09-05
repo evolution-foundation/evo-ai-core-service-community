@@ -97,6 +97,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It replaced the mapped lookup error with a plain one, which the error handler
   could only read as an internal error.
 
+### Fixed
+
+- **`POST` / `PUT` / `DELETE /api/v1/mcp-servers` now reach their handlers.**
+  They answered **401** `{"error":"User is not an admin"}` for every caller,
+  `super_admin` included, so the whole write surface of the MCP Servers
+  feature was unusable. The admin gate read `is_admin` from gin's key map
+  with `c.GetBool`, and nothing in the service ever wrote that key: the sole
+  assignment lives in `internal/middleware/jwt.go`, which puts it on the
+  request context instead, and that middleware has no call sites. Two
+  different stores plus no writer means the boolean was unconditionally
+  false — a permanently closed door rather than an unenforced policy.
+  - **The gate is deleted, not repaired.**
+    `internal/middleware/user_admin.go` is removed and
+    `RequirePermission("ai_mcp_servers", <action>)` remains the enforcement,
+    matching the other write routes in this service and the auth service's
+    RBAC model, whose seed grants all five `ai_mcp_servers` actions to
+    `super_admin` and to `account_owner` — the two keys withheld from
+    `account_owner` are `accounts.stats` and `installation_configs.manage`,
+    withheld from the catalog as a whole, neither of them an MCP key.
+    Repairing the gate would have meant inventing a local role authority in
+    Go, which would also refuse custom roles that legitimately hold the
+    permission.
+  - **Contract:** this is a security-relevant behavior change — the routes
+    become reachable for the first time. They are not open: every one of
+    them still requires the auth service to grant the matching
+    `ai_mcp_servers` permission. An operator who was relying on the hard
+    401 as a block should revoke that permission instead.
+
 ## [v1.0.0-rc6] - 2026-07-04
 
 Feature release — server-side advanced filtering across the list endpoints, a rebuilt Custom Tool test endpoint, a standalone community image build, and enterprise multi-tenancy extension points that remain no-ops in the community build.
