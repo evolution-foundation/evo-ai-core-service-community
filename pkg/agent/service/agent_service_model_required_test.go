@@ -53,11 +53,25 @@ func (f *modelRequiredFakeRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.
 	return &snapshot, nil
 }
 
+// Update mirrors what the real repository does — GORM Updates(struct), which skips zero
+// values — instead of replacing the row. A fake that overwrote everything would make a
+// partial edit look like data loss and would hide the very semantics this file relies on.
 func (f *modelRequiredFakeRepo) Update(_ context.Context, agent *model.Agent, _ uuid.UUID) (*model.Agent, error) {
 	f.updateCalled = true
-	stored := *agent
-	f.stored = &stored
-	return agent, nil
+
+	merged := *f.stored
+	if agent.Name != "" {
+		merged.Name = agent.Name
+	}
+	if agent.Type != "" {
+		merged.Type = agent.Type
+	}
+	if agent.Model != "" {
+		merged.Model = agent.Model
+	}
+
+	f.stored = &merged
+	return &merged, nil
 }
 
 // modelRequiredFakeEvolution keeps Create/Update past the repository without a
@@ -201,7 +215,42 @@ func TestValidateCreate_FlowTypesWithoutModelStayAllowed(t *testing.T) {
 	}
 }
 
-func TestUpdate_CannotBlankTheModelOfAnLLMAgent(t *testing.T) {
+// The update that has to be refused is the one that would LEAVE the row without a model:
+// the agent already stored broken (agente_teste_minimo, SUPORTEEVO-24) being edited
+// without picking one. The row cannot be saved back into a state that cannot run.
+func TestUpdate_CannotSaveAnLLMAgentThatStillHasNoModel(t *testing.T) {
+	repo := &modelRequiredFakeRepo{}
+	svc := serviceForModelValidation(repo)
+
+	existing := &model.Agent{
+		ID:     uuid.New(),
+		Name:   "agente_quebrado",
+		Type:   model.AgentTypeLLM,
+		Model:  "",
+		Config: `{"api_key":"stored-key"}`,
+	}
+	repo.stored = existing
+	repo.updateCalled = false
+
+	_, err := svc.Update(context.Background(), &model.Agent{
+		Name:   "nome_novo",
+		Type:   model.AgentTypeLLM,
+		Config: `{}`,
+	}, existing.ID)
+
+	assertModelRejection(t, err)
+
+	if repo.updateCalled {
+		t.Error("the update wrote a row that still cannot run")
+	}
+}
+
+// THE REGRESSION GUARD, and the reason the rule is checked against the merged state.
+// This API supports partial updates: the repository persists with GORM Updates(struct),
+// which skips zero values, so a field the client leaves out keeps what the row had —
+// verified against a live server. Validating the incoming payload instead would reject
+// this rename, which works today and which Darwin depends on.
+func TestUpdate_PartialEditOfAnLLMAgentKeepsWorking(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)
 
@@ -213,23 +262,21 @@ func TestUpdate_CannotBlankTheModelOfAnLLMAgent(t *testing.T) {
 		Config: `{"api_key":"stored-key"}`,
 	}
 	repo.stored = existing
-	repo.updateCalled = false
 
-	_, err := svc.Update(context.Background(), &model.Agent{
-		Name:   "agente",
+	// name and type travel (the handler binds them as required); model does not.
+	if _, err := svc.Update(context.Background(), &model.Agent{
+		Name:   "nome_novo",
 		Type:   model.AgentTypeLLM,
-		Model:  "",
 		Config: `{}`,
-	}, existing.ID)
-
-	assertModelRejection(t, err)
-
-	if repo.updateCalled {
-		t.Error("the update wrote the empty model — an agent that used to run stops running")
+	}, existing.ID); err != nil {
+		t.Fatalf("a rename that does not resend the model was rejected: %v", err)
 	}
+
 	if repo.stored.Model != "openai/gpt-4.1-mini" {
-		t.Errorf("stored model became %q; the rejected update must leave the row alone",
-			repo.stored.Model)
+		t.Errorf("stored model became %q; an omitted field must keep its value", repo.stored.Model)
+	}
+	if repo.stored.Name != "nome_novo" {
+		t.Errorf("stored name is %q; the rename did not take effect", repo.stored.Name)
 	}
 }
 

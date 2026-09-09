@@ -152,6 +152,38 @@ func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, 
 	return s.validateRelatedEntities(ctx, request, isCreate)
 }
 
+// validateAgentUpdate is the update counterpart, and it exists because this API
+// supports PARTIAL updates. The repository persists with GORM Updates(struct),
+// which skips zero values, so a field the client leaves out keeps whatever the
+// row already had — confirmed against a live server: editing an agent without
+// resending `model` does not blank the stored one.
+//
+// So the rule has to be checked against the state the update will PRODUCE. The
+// first cut of this fix validated the incoming payload, which would have rejected
+// a plain rename that does not resend `model` — a regression, not a fix. Darwin
+// edits agents exactly that way (its update_ai_agent tool requires only the id
+// beyond what the handler binds).
+//
+// What it still catches is the write that matters: an update that would leave the
+// row an llm agent with no model at all.
+func (s *agentService) validateAgentUpdate(ctx context.Context, current, request *model.Agent) error {
+	merged := *request
+
+	if strings.TrimSpace(merged.Type) == "" {
+		merged.Type = current.Type
+	}
+
+	if strings.TrimSpace(merged.Model) == "" {
+		merged.Model = current.Model
+	}
+
+	if err := validateModelForType(&merged); err != nil {
+		return err
+	}
+
+	return s.validateRelatedEntities(ctx, request, false)
+}
+
 // validateModelForType rejects an `llm` agent with no model. It cannot be a
 // `binding:"required"` tag on AgentBase: the rule is conditional on the type, and a
 // blanket tag would also reject the sequential/parallel/loop agents that arrive
@@ -241,7 +273,7 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 		return nil, errors.New("Failed to get current agent")
 	}
 
-	if err := s.validateAgent(ctx, request, false); err != nil {
+	if err := s.validateAgentUpdate(ctx, current, request); err != nil {
 		return nil, wrapValidationError("Validation failed: ", err)
 	}
 
