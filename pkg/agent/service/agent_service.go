@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 
+	apiErrors "evo-ai-core-service/internal/httpclient/errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/client/a2a"
@@ -101,7 +104,7 @@ func NewAgentService(
 
 func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.Agent, error) {
 	if err := s.validateCreate(ctx, &request); err != nil {
-		return nil, errors.New("Validation failed for agent: " + err.Error())
+		return nil, wrapValidationError("Validation failed for agent: ", err)
 	}
 
 	if err := s.processAgentCreate(ctx, &request); err != nil {
@@ -132,8 +135,61 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	return agent, nil
 }
 
+// modelRequiredMessage repeats, word for word, what the processor raises for the
+// same payload (evo-ai-processor-community, src/schemas/schemas.py, the `model`
+// validator). The two services must not disagree about why an agent is invalid.
+const modelRequiredMessage = "Model is required for llm type agents"
+
+// validateAgent is the single gate in front of every write: Create, Update and
+// ImportAgentsFromJSON (through validateCreate) all pass through here, and the
+// handler ports — the agents API, the import upload and Darwin, which drives the
+// same HTTP API — have no other way to reach the repository.
+func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, isCreate bool) error {
+	if err := validateModelForType(request); err != nil {
+		return err
+	}
+
+	return s.validateRelatedEntities(ctx, request, isCreate)
+}
+
+// validateModelForType rejects an `llm` agent with no model. It cannot be a
+// `binding:"required"` tag on AgentBase: the rule is conditional on the type, and a
+// blanket tag would also reject the sequential/parallel/loop agents that arrive
+// without a model and are repaired by sanitizeAgent.
+//
+// Reported as VALIDATION_ERROR / 400, the same code and status this endpoint
+// already answers when `name` or `type` is missing, rather than the 422 the card
+// suggests: in this repo 422 is the business-rule bucket (the agent quota), and a
+// caller that branches on a validation failure should not need two branches for
+// two missing fields of one form.
+func validateModelForType(request *model.Agent) error {
+	if request.Type != model.AgentTypeLLM {
+		return nil
+	}
+
+	if strings.TrimSpace(request.Model) != "" {
+		return nil
+	}
+
+	return apiErrors.New(apiErrors.ValidationError, modelRequiredMessage, http.StatusBadRequest)
+}
+
+// wrapValidationError keeps an *apiErrors.ApiError intact on its way to the
+// handler, which reads the code and status off it. The plain errors.New wrapper it
+// replaces flattened every validation failure into a 500 INTERNAL_ERROR, so a
+// rejected agent would fail the user silently instead of telling them what to fix.
+// Anything else keeps the message it had.
+func wrapValidationError(prefix string, err error) error {
+	var apiErr *apiErrors.ApiError
+	if errors.As(err, &apiErr) {
+		return err
+	}
+
+	return errors.New(prefix + err.Error())
+}
+
 func (s *agentService) validateCreate(ctx context.Context, request *model.Agent) error {
-	return s.validateRelatedEntities(ctx, request, true)
+	return s.validateAgent(ctx, request, true)
 }
 
 func (s *agentService) validateRelatedEntities(ctx context.Context, request *model.Agent, isCreate bool) error {
@@ -185,8 +241,8 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 		return nil, errors.New("Failed to get current agent")
 	}
 
-	if err := s.validateRelatedEntities(ctx, request, false); err != nil {
-		return nil, errors.New("Validation failed: " + err.Error())
+	if err := s.validateAgent(ctx, request, false); err != nil {
+		return nil, wrapValidationError("Validation failed: ", err)
 	}
 
 	if err := s.processAgentUpdate(ctx, current, request); err != nil {
