@@ -1,9 +1,5 @@
 package service
 
-// CRM-573: the processor refuses an `llm` agent with an empty `model`
-// (src/schemas/schemas.py, @validator("model")), so the core must refuse it at
-// write time instead of persisting a row that can never run.
-
 import (
 	"context"
 	"errors"
@@ -20,9 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// modelRequiredFakeRepo records every write so a test can assert that a rejected
-// payload reached no write at all — "returned an error" is not the same claim as
-// "nothing was persisted", and the defect is the persistence.
+// Records every write so a test can assert a rejected payload reached none.
 type modelRequiredFakeRepo struct {
 	repository.AgentRepository
 	stored       *model.Agent
@@ -48,9 +42,7 @@ func (f *modelRequiredFakeRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.
 	return &snapshot, nil
 }
 
-// Update mirrors what the real repository does — GORM Updates(struct), which skips zero
-// values — instead of replacing the row. A fake that overwrote everything would make a
-// partial edit look like data loss and would hide the very semantics this file relies on.
+// Merges like GORM Updates(struct): zero values do not overwrite the row.
 func (f *modelRequiredFakeRepo) Update(_ context.Context, agent *model.Agent, _ uuid.UUID) (*model.Agent, error) {
 	f.updateCalled = true
 
@@ -69,9 +61,7 @@ func (f *modelRequiredFakeRepo) Update(_ context.Context, agent *model.Agent, _ 
 	return &merged, nil
 }
 
-// modelRequiredFakeEvolution keeps Create/Update past the repository without a
-// bot backend. It reports failure, the path the service already tolerates, so the
-// bot round-trip does not add writes the persistence assertions would misread.
+// Fails the bot round-trip (tolerated by the service) so it adds no writes.
 type modelRequiredFakeEvolution struct {
 	EvolutionService
 }
@@ -97,9 +87,6 @@ func serviceForModelValidation(repo *modelRequiredFakeRepo) *agentService {
 	}
 }
 
-// assertModelRejection pins what the caller actually receives: the UI and Darwin
-// only ever see the code, the status and the message. A rejection that reaches
-// them as a 500 INTERNAL_ERROR is the silent failure this card is about.
 func assertModelRejection(t *testing.T, err error) {
 	t.Helper()
 
@@ -120,8 +107,6 @@ func assertModelRejection(t *testing.T, err error) {
 	if code != apierrors.ValidationError {
 		t.Errorf("code = %q, want %q", code, apierrors.ValidationError)
 	}
-	// Same sentence the processor raises, so the two services do not disagree
-	// about why the same payload is invalid.
 	if !strings.Contains(message, "Model is required for llm type agents") {
 		t.Errorf("message = %q, want it to carry the processor's own wording", message)
 	}
@@ -145,9 +130,6 @@ func TestCreate_LLMWithoutModelIsRejectedAndPersistsNothing(t *testing.T) {
 	}
 }
 
-// Whitespace is not a model. Trimming it here keeps the core's answer identical to
-// the processor's, which treats "   " as truthy but hands it to LiteLLM as a name
-// no provider resolves.
 func TestCreate_LLMWithBlankModelIsRejected(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)
@@ -188,9 +170,7 @@ func TestCreate_LLMWithModelIsAccepted(t *testing.T) {
 	}
 }
 
-// AC4 guard at the validation layer: the repair path for flow agents starts from a
-// row with no model, so a blanket required-model rule would make those agents
-// unwritable. The sanitizeAgent tests cover the repair itself.
+// Flow agents arrive without a model and are repaired by sanitizeAgent.
 func TestValidateCreate_FlowTypesWithoutModelStayAllowed(t *testing.T) {
 	svc := serviceForModelValidation(&modelRequiredFakeRepo{})
 
@@ -210,9 +190,6 @@ func TestValidateCreate_FlowTypesWithoutModelStayAllowed(t *testing.T) {
 	}
 }
 
-// The update that has to be refused is the one that would LEAVE the row without a model:
-// the agent already stored broken (agente_teste_minimo, SUPORTEEVO-24) being edited
-// without picking one. The row cannot be saved back into a state that cannot run.
 func TestUpdate_CannotSaveAnLLMAgentThatStillHasNoModel(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)
@@ -240,11 +217,7 @@ func TestUpdate_CannotSaveAnLLMAgentThatStillHasNoModel(t *testing.T) {
 	}
 }
 
-// THE REGRESSION GUARD, and the reason the rule is checked against the merged state.
-// This API supports partial updates: the repository persists with GORM Updates(struct),
-// which skips zero values, so a field the client leaves out keeps what the row had —
-// verified against a live server. Validating the incoming payload instead would reject
-// this rename, which works today and which Darwin depends on.
+// Partial update: a rename that does not resend `model` must keep working.
 func TestUpdate_PartialEditOfAnLLMAgentKeepsWorking(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)
@@ -258,7 +231,6 @@ func TestUpdate_PartialEditOfAnLLMAgentKeepsWorking(t *testing.T) {
 	}
 	repo.stored = existing
 
-	// name and type travel (the handler binds them as required); model does not.
 	if _, err := svc.Update(context.Background(), &model.Agent{
 		Name:   "nome_novo",
 		Type:   model.AgentTypeLLM,
@@ -303,10 +275,8 @@ func TestUpdate_LLMWithModelStillPasses(t *testing.T) {
 	}
 }
 
-// The import path builds its agents itself and never touches the handler binding,
-// so it is a third door onto the same table and needs its own proof. Only the
-// invalid agent is asserted: the loop writes agent by agent, so an earlier valid
-// entry of the same file is already persisted when the rejection fires.
+// Only the invalid agent is asserted: the loop writes agent by agent, so the valid
+// entry before it is already persisted when the rejection fires.
 func TestImportAgents_RejectsLLMWithoutModelAndDoesNotImportIt(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)

@@ -135,12 +135,9 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	return agent, nil
 }
 
-// Same sentence the processor raises for this payload (src/schemas/schemas.py,
-// the `model` validator), so both services name the defect the same way.
+// Same sentence the processor raises (src/schemas/schemas.py, `model` validator).
 const modelRequiredMessage = "Model is required for llm type agents"
 
-// validateAgent gates the create paths: Create and ImportAgentsFromJSON, both via
-// validateCreate. Update has its own gate, validateAgentUpdate.
 func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, isCreate bool) error {
 	if err := validateModelForType(request); err != nil {
 		return err
@@ -149,10 +146,8 @@ func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, 
 	return s.validateRelatedEntities(ctx, request, isCreate)
 }
 
-// validateAgentUpdate checks the row the update will PRODUCE, not the payload: the
-// repository persists with GORM Updates(struct), which skips zero values, so a
-// field the client omits keeps the stored one. Validating the payload would reject
-// a rename that does not resend `model` (how Darwin edits agents).
+// Validates the row the update will produce: GORM Updates(struct) skips zero
+// values, so a field the client omits keeps the stored one.
 func (s *agentService) validateAgentUpdate(ctx context.Context, current, request *model.Agent) error {
 	merged := *request
 
@@ -171,10 +166,6 @@ func (s *agentService) validateAgentUpdate(ctx context.Context, current, request
 	return s.validateRelatedEntities(ctx, request, false)
 }
 
-// validateModelForType rejects an `llm` agent with no model. Not a binding tag:
-// the rule is conditional on the type, and flow agents legitimately arrive without
-// a model (sanitizeAgent repairs them). 400 like the other missing-field errors of
-// this endpoint; 422 is the business-rule bucket here.
 func validateModelForType(request *model.Agent) error {
 	if request.Type != model.AgentTypeLLM {
 		return nil
@@ -187,8 +178,7 @@ func validateModelForType(request *model.Agent) error {
 	return apiErrors.New(apiErrors.ValidationError, modelRequiredMessage, http.StatusBadRequest)
 }
 
-// wrapValidationError keeps an *apiErrors.ApiError intact so the handler reads its
-// code and status; a plain errors.New wrapper would turn it into a 500.
+// Keeps an *apiErrors.ApiError intact; wrapping it would reach the handler as a 500.
 func wrapValidationError(prefix string, err error) error {
 	var apiErr *apiErrors.ApiError
 	if errors.As(err, &apiErr) {
