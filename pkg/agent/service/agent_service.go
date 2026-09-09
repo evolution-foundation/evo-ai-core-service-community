@@ -135,15 +135,12 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	return agent, nil
 }
 
-// modelRequiredMessage repeats, word for word, what the processor raises for the
-// same payload (evo-ai-processor-community, src/schemas/schemas.py, the `model`
-// validator). The two services must not disagree about why an agent is invalid.
+// Same sentence the processor raises for this payload (src/schemas/schemas.py,
+// the `model` validator), so both services name the defect the same way.
 const modelRequiredMessage = "Model is required for llm type agents"
 
-// validateAgent is the single gate in front of every write: Create, Update and
-// ImportAgentsFromJSON (through validateCreate) all pass through here, and the
-// handler ports — the agents API, the import upload and Darwin, which drives the
-// same HTTP API — have no other way to reach the repository.
+// validateAgent gates the create paths: Create and ImportAgentsFromJSON, both via
+// validateCreate. Update has its own gate, validateAgentUpdate.
 func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, isCreate bool) error {
 	if err := validateModelForType(request); err != nil {
 		return err
@@ -152,20 +149,10 @@ func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, 
 	return s.validateRelatedEntities(ctx, request, isCreate)
 }
 
-// validateAgentUpdate is the update counterpart, and it exists because this API
-// supports PARTIAL updates. The repository persists with GORM Updates(struct),
-// which skips zero values, so a field the client leaves out keeps whatever the
-// row already had — confirmed against a live server: editing an agent without
-// resending `model` does not blank the stored one.
-//
-// So the rule has to be checked against the state the update will PRODUCE. The
-// first cut of this fix validated the incoming payload, which would have rejected
-// a plain rename that does not resend `model` — a regression, not a fix. Darwin
-// edits agents exactly that way (its update_ai_agent tool requires only the id
-// beyond what the handler binds).
-//
-// What it still catches is the write that matters: an update that would leave the
-// row an llm agent with no model at all.
+// validateAgentUpdate checks the row the update will PRODUCE, not the payload: the
+// repository persists with GORM Updates(struct), which skips zero values, so a
+// field the client omits keeps the stored one. Validating the payload would reject
+// a rename that does not resend `model` (how Darwin edits agents).
 func (s *agentService) validateAgentUpdate(ctx context.Context, current, request *model.Agent) error {
 	merged := *request
 
@@ -184,16 +171,10 @@ func (s *agentService) validateAgentUpdate(ctx context.Context, current, request
 	return s.validateRelatedEntities(ctx, request, false)
 }
 
-// validateModelForType rejects an `llm` agent with no model. It cannot be a
-// `binding:"required"` tag on AgentBase: the rule is conditional on the type, and a
-// blanket tag would also reject the sequential/parallel/loop agents that arrive
-// without a model and are repaired by sanitizeAgent.
-//
-// Reported as VALIDATION_ERROR / 400, the same code and status this endpoint
-// already answers when `name` or `type` is missing, rather than the 422 the card
-// suggests: in this repo 422 is the business-rule bucket (the agent quota), and a
-// caller that branches on a validation failure should not need two branches for
-// two missing fields of one form.
+// validateModelForType rejects an `llm` agent with no model. Not a binding tag:
+// the rule is conditional on the type, and flow agents legitimately arrive without
+// a model (sanitizeAgent repairs them). 400 like the other missing-field errors of
+// this endpoint; 422 is the business-rule bucket here.
 func validateModelForType(request *model.Agent) error {
 	if request.Type != model.AgentTypeLLM {
 		return nil
@@ -206,11 +187,8 @@ func validateModelForType(request *model.Agent) error {
 	return apiErrors.New(apiErrors.ValidationError, modelRequiredMessage, http.StatusBadRequest)
 }
 
-// wrapValidationError keeps an *apiErrors.ApiError intact on its way to the
-// handler, which reads the code and status off it. The plain errors.New wrapper it
-// replaces flattened every validation failure into a 500 INTERNAL_ERROR, so a
-// rejected agent would fail the user silently instead of telling them what to fix.
-// Anything else keeps the message it had.
+// wrapValidationError keeps an *apiErrors.ApiError intact so the handler reads its
+// code and status; a plain errors.New wrapper would turn it into a 500.
 func wrapValidationError(prefix string, err error) error {
 	var apiErr *apiErrors.ApiError
 	if errors.As(err, &apiErr) {

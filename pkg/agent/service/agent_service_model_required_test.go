@@ -1,13 +1,8 @@
 package service
 
-// CRM-573 — an agent the core service stores has to be an agent the processor can
-// run. The processor refuses an `llm` agent with an empty `model`
-// (evo-ai-processor-community, src/schemas/schemas.py, @validator("model")), so the
-// core service must refuse it at write time instead of persisting a row that can
-// never execute. `agente_teste_minimo` was written to production with model = ''.
-//
-// The rule is conditional on the type, not a binding tag: sequential/parallel/loop
-// agents legitimately arrive with no model and are repaired by sanitizeAgent.
+// CRM-573: the processor refuses an `llm` agent with an empty `model`
+// (src/schemas/schemas.py, @validator("model")), so the core must refuse it at
+// write time instead of persisting a row that can never run.
 
 import (
 	"context"
@@ -309,8 +304,10 @@ func TestUpdate_LLMWithModelStillPasses(t *testing.T) {
 }
 
 // The import path builds its agents itself and never touches the handler binding,
-// so it is a third door onto the same table and needs its own proof.
-func TestImportAgents_RejectsLLMWithoutModelAndImportsNothing(t *testing.T) {
+// so it is a third door onto the same table and needs its own proof. Only the
+// invalid agent is asserted: the loop writes agent by agent, so an earlier valid
+// entry of the same file is already persisted when the rejection fires.
+func TestImportAgents_RejectsLLMWithoutModelAndDoesNotImportIt(t *testing.T) {
 	repo := &modelRequiredFakeRepo{}
 	svc := serviceForModelValidation(repo)
 
