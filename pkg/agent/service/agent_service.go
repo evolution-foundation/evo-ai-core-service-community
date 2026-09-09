@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 
+	apiErrors "evo-ai-core-service/internal/httpclient/errors"
 	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/client/a2a"
@@ -24,6 +27,9 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// Same sentence the processor uses, so the two halves of the system say the same thing.
+const cardURLRequiredMessage = "card_url is required for a2a type agents"
 
 // Persisted onto a malformed agent coerced to LLM, so a retired id here lands in
 // the customer's data. Prefixed: LiteLLM only guesses bare names it already knows.
@@ -100,6 +106,10 @@ func NewAgentService(
 }
 
 func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.Agent, error) {
+	if err := validateCardURLForType(&request); err != nil {
+		return nil, err
+	}
+
 	if err := s.validateCreate(ctx, &request); err != nil {
 		return nil, errors.New("Validation failed for agent: " + err.Error())
 	}
@@ -130,6 +140,62 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	}
 
 	return agent, nil
+}
+
+// An a2a agent is a pointer to an agent card served somewhere else, and card_url is that
+// pointer. Without it the agent is unrunnable: the processor's builder refuses it at
+// execution time (evo-ai-processor-community, src/services/adk/agents/a2a_agent_builder.py:52,
+// "card_url is required for a2a agents").
+//
+// The create path already refused this (processor/a2a.go), but two things were wrong:
+// the reason was swallowed into a generic "Failed to process agent" 500 by the caller, and
+// UPDATE never checked at all — A2AProcessor.Update only acts when CardURL is non-empty, so
+// blanking the field on an existing a2a agent, or switching an agent's type to a2a with the
+// field empty, was persisted in silence. That is CRM-577.
+//
+// Careful with the read paths when reasoning about this: both sides DERIVE a url when the
+// column is empty (forceReturnCardUrl here, card_url_property in the processor), so an
+// agent with an empty card_url still looks fine in an API response. The derivation serves
+// the response; execution reads the raw column.
+//
+// Only a2a is affected. Every other type legitimately has no card_url, and a blanket
+// binding tag would break them.
+func validateCardURLForType(request *model.Agent) error {
+	if request.Type != model.AgentTypeA2A {
+		return nil
+	}
+
+	if strings.TrimSpace(request.CardURL) != "" {
+		return nil
+	}
+
+	return apiErrors.New(apiErrors.ValidationError, cardURLRequiredMessage, http.StatusBadRequest)
+}
+
+// The update counterpart, and the reason it exists: this API supports PARTIAL updates.
+// The repository persists with GORM Updates(struct), which skips zero values, so a field
+// the client omits (or sends empty) keeps whatever the row already had — that is how
+// Darwin edits an agent, its update_ai_agent tool requires only the id.
+//
+// So the rule has to be checked against the state the update will PRODUCE, not against
+// the payload. Validating the payload would reject a legitimate rename that does not
+// resend card_url, which is a regression, not a fix.
+//
+// What this catches is the real hole: switching an agent to a2a while the stored card_url
+// is empty. Type is a non-empty string in that payload, so GORM writes it, and the row
+// becomes an a2a agent with no card — accepted with 200 today, unrunnable afterwards.
+func validateCardURLForUpdate(current, request *model.Agent) error {
+	merged := *request
+
+	if strings.TrimSpace(merged.Type) == "" {
+		merged.Type = current.Type
+	}
+
+	if strings.TrimSpace(merged.CardURL) == "" {
+		merged.CardURL = current.CardURL
+	}
+
+	return validateCardURLForType(&merged)
 }
 
 func (s *agentService) validateCreate(ctx context.Context, request *model.Agent) error {
@@ -183,6 +249,10 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 	current, err := s.GetByID(ctx, id)
 	if err != nil {
 		return nil, errors.New("Failed to get current agent")
+	}
+
+	if err := validateCardURLForUpdate(current, request); err != nil {
+		return nil, err
 	}
 
 	if err := s.validateRelatedEntities(ctx, request, false); err != nil {
@@ -697,6 +767,10 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 			if err == nil {
 				agent.ApiKeyID = &apiKeyID
 			}
+		}
+
+		if err := validateCardURLForType(agent); err != nil {
+			return nil, err
 		}
 
 		if err := s.validateCreate(ctx, agent); err != nil {
