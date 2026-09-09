@@ -106,12 +106,8 @@ func NewAgentService(
 }
 
 func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.Agent, error) {
-	if err := validateCardURLForType(&request); err != nil {
-		return nil, err
-	}
-
 	if err := s.validateCreate(ctx, &request); err != nil {
-		return nil, errors.New("Validation failed for agent: " + err.Error())
+		return nil, wrapValidationError("Validation failed for agent: ", err)
 	}
 
 	if err := s.processAgentCreate(ctx, &request); err != nil {
@@ -142,6 +138,72 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	return agent, nil
 }
 
+// Same sentence the processor raises (src/schemas/schemas.py, `model` validator).
+const modelRequiredMessage = "Model is required for llm type agents"
+
+func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, isCreate bool) error {
+	if err := validateModelForType(request); err != nil {
+		return err
+	}
+
+	if err := validateCardURLForType(request); err != nil {
+		return err
+	}
+
+	return s.validateRelatedEntities(ctx, request, isCreate)
+}
+
+// Validates the row the update will produce: GORM Updates(struct) skips zero
+// values, so a field the client omits keeps the stored one.
+func (s *agentService) validateAgentUpdate(ctx context.Context, current, request *model.Agent) error {
+	merged := *request
+
+	if strings.TrimSpace(merged.Type) == "" {
+		merged.Type = current.Type
+	}
+
+	if strings.TrimSpace(merged.Model) == "" {
+		merged.Model = current.Model
+	}
+
+	// Exact empties only: GORM writes whitespace, so it must not fall back.
+	if merged.CardURL == "" {
+		merged.CardURL = current.CardURL
+	}
+
+	if err := validateModelForType(&merged); err != nil {
+		return err
+	}
+
+	if err := validateCardURLForType(&merged); err != nil {
+		return err
+	}
+
+	return s.validateRelatedEntities(ctx, request, false)
+}
+
+func validateModelForType(request *model.Agent) error {
+	if request.Type != model.AgentTypeLLM {
+		return nil
+	}
+
+	if strings.TrimSpace(request.Model) != "" {
+		return nil
+	}
+
+	return apiErrors.New(apiErrors.ValidationError, modelRequiredMessage, http.StatusBadRequest)
+}
+
+// Keeps an *apiErrors.ApiError intact; wrapping it would reach the handler as a 500.
+func wrapValidationError(prefix string, err error) error {
+	var apiErr *apiErrors.ApiError
+	if errors.As(err, &apiErr) {
+		return err
+	}
+
+	return errors.New(prefix + err.Error())
+}
+
 // Only a2a needs card_url; the processor refuses to run one without it.
 func validateCardURLForType(request *model.Agent) error {
 	if request.Type != model.AgentTypeA2A {
@@ -155,24 +217,8 @@ func validateCardURLForType(request *model.Agent) error {
 	return apiErrors.New(apiErrors.ValidationError, cardURLRequiredMessage, http.StatusBadRequest)
 }
 
-// Checks the merged state: GORM Updates skips exact empties (partial update) but
-// writes whitespace, so only exact empties fall back to the stored value.
-func validateCardURLForUpdate(current, request *model.Agent) error {
-	merged := *request
-
-	if merged.Type == "" {
-		merged.Type = current.Type
-	}
-
-	if merged.CardURL == "" {
-		merged.CardURL = current.CardURL
-	}
-
-	return validateCardURLForType(&merged)
-}
-
 func (s *agentService) validateCreate(ctx context.Context, request *model.Agent) error {
-	return s.validateRelatedEntities(ctx, request, true)
+	return s.validateAgent(ctx, request, true)
 }
 
 func (s *agentService) validateRelatedEntities(ctx context.Context, request *model.Agent, isCreate bool) error {
@@ -224,12 +270,8 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 		return nil, errors.New("Failed to get current agent")
 	}
 
-	if err := validateCardURLForUpdate(current, request); err != nil {
-		return nil, err
-	}
-
-	if err := s.validateRelatedEntities(ctx, request, false); err != nil {
-		return nil, errors.New("Validation failed: " + err.Error())
+	if err := s.validateAgentUpdate(ctx, current, request); err != nil {
+		return nil, wrapValidationError("Validation failed: ", err)
 	}
 
 	if err := s.processAgentUpdate(ctx, current, request); err != nil {
