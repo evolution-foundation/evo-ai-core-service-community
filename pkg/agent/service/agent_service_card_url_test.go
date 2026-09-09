@@ -1,28 +1,7 @@
 package service
 
-// CRM-577 — an `a2a` agent is a pointer to an agent card served elsewhere, and `card_url`
-// is that pointer. Without it the agent cannot run: the builder in the processor refuses
-// it at execution time (evo-ai-processor-community,
-// src/services/adk/agents/a2a_agent_builder.py:52, "card_url is required for a2a agents").
-//
-// Two things were wrong, both reproduced live against develop before this fix:
-//
-//  1. CREATE already refused it in processor/a2a.go, but the caller replaced the reason
-//     with a generic "Failed to process agent" — the API answered 500 INTERNAL_ERROR and
-//     the user was told nothing actionable.
-//  2. UPDATE never checked, because A2AProcessor.Update only acts when CardURL is
-//     non-empty. Switching an agent to a2a while the stored card_url is empty was written
-//     and answered 200. The row became an a2a agent with no card.
-//
-// Two things that are NOT true, and were checked rather than assumed:
-//
-//   - Sending card_url empty does not blank the stored value. The repository persists with
-//     GORM Updates(struct), which skips zero values, so an omitted or empty field keeps
-//     what the row had. That is also why the update rule below is checked against the
-//     MERGED state: this API supports partial updates and Darwin relies on them.
-//   - "It comes back fine from GET" is not a defence: both services DERIVE a url when the
-//     column is empty (forceReturnCardUrl here, card_url_property in the processor). The
-//     derivation serves the response; execution reads the raw column.
+// card_url is required for a2a agents on create, update and import; the update rule
+// is checked against the merged state because the repository does partial updates.
 
 import (
 	"context"
@@ -40,9 +19,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// cardURLFakeRepo records every write, so a test can assert that a rejected payload
-// reached no write at all — "returned an error" and "wrote nothing" are different claims,
-// and the defect is the write.
+// Records every write.
 type cardURLFakeRepo struct {
 	repository.AgentRepository
 	stored       *model.Agent
@@ -68,10 +45,7 @@ func (f *cardURLFakeRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Agent,
 	return &snapshot, nil
 }
 
-// Update mirrors what the real repository does — GORM Updates(struct), which skips zero
-// values — instead of replacing the row. A fake that overwrites everything would make a
-// partial edit look like data loss and would quietly invalidate every persistence
-// assertion in this file.
+// Mirrors GORM Updates(struct): zero values keep the stored field.
 func (f *cardURLFakeRepo) Update(_ context.Context, agent *model.Agent, _ uuid.UUID) (*model.Agent, error) {
 	f.updateCalled = true
 
@@ -105,18 +79,13 @@ func (cardURLFakeEvolution) UpdateAgentBot(_ context.Context, _ *model.Agent, _ 
 	return nil, errors.New("no evolution backend in tests")
 }
 
-// cardURLFakeA2AProcessor stands in for the real one, which would fetch the agent card
-// over the network. It is wired deliberately: without it, removing the validation under
-// test makes the service dereference a nil processor and panic, and a panicking binary
-// aborts the run instead of reporting which examples the missing validation breaks — a
-// red proof has to be readable.
+// Replaces the network fetch.
 type cardURLFakeA2AProcessor struct {
 	created int
 }
 
 func (p *cardURLFakeA2AProcessor) Create(_ context.Context, agent *model.Agent) error {
-	// Same refusal the real processor performs, so the fake does not accidentally accept
-	// what production rejects.
+	// Same refusal as the real processor.
 	if agent.CardURL == "" {
 		return errors.New("card_url is required for a2a type agents")
 	}
@@ -142,9 +111,7 @@ func serviceForCardURLValidation(repo *cardURLFakeRepo) *agentService {
 	}
 }
 
-// What the caller actually receives: the UI and Darwin only see the code, the status and
-// the message. A rejection that arrives as a 500 INTERNAL_ERROR tells the user nothing —
-// and that generic 500 is half of what this card is about.
+// Asserts a 400 VALIDATION_ERROR naming the field.
 func assertCardURLRejection(t *testing.T, err error) {
 	t.Helper()
 
@@ -193,8 +160,7 @@ func TestCreate_A2AWithBlankCardURLIsRejected(t *testing.T) {
 	repo := &cardURLFakeRepo{}
 	svc := serviceForCardURLValidation(repo)
 
-	// Whitespace is not a url. Without TrimSpace this is the payload that slips past a
-	// naive emptiness check and lands in the database.
+	// Whitespace is not a url.
 	_, err := svc.Create(context.Background(), model.Agent{
 		Name:    "agente_a2a",
 		Type:    model.AgentTypeA2A,
@@ -208,10 +174,6 @@ func TestCreate_A2AWithBlankCardURLIsRejected(t *testing.T) {
 	}
 }
 
-// The hole this card is really about, reproduced live against develop before the fix: an
-// llm agent (card_url empty, as every non-a2a agent is) switched to a2a. Type is a
-// non-empty string, so GORM writes it; card_url stays empty; the API answers 200. The row
-// is now an a2a agent with no card, which the processor refuses to run.
 func TestUpdate_CannotSwitchTypeToA2AWhenTheRowHasNoCardURL(t *testing.T) {
 	repo := &cardURLFakeRepo{}
 	svc := serviceForCardURLValidation(repo)
@@ -264,11 +226,7 @@ func TestUpdate_TypeSwitchToA2AIsAllowedWhenTheRowAlreadyCarriesACard(t *testing
 	}
 }
 
-// THE REGRESSION GUARD. This API supports partial updates: the repository persists with
-// GORM Updates(struct), which skips zero values, and Darwin edits agents that way — its
-// update_ai_agent tool requires only the id. A validation written against the payload
-// instead of the merged state rejects this rename, breaking an edit that works today.
-// Confirmed against develop: sending card_url empty does NOT blank the stored one.
+// Partial updates that do not resend card_url must keep working.
 func TestUpdate_PartialEditOfAnA2AAgentIsNotRejected(t *testing.T) {
 	repo := &cardURLFakeRepo{}
 	svc := serviceForCardURLValidation(repo)
@@ -283,16 +241,47 @@ func TestUpdate_PartialEditOfAnA2AAgentIsNotRejected(t *testing.T) {
 	repo.stored = existing
 
 	for _, payload := range []*model.Agent{
-		// só o nome muda, nem type nem card_url viajam
+		// only the name travels
 		{Name: "nome_novo", Config: "{}"},
-		// o type viaja, o card_url não — o caso que quebraria com validação do payload cru
+		// type travels, card_url does not
 		{Name: "nome_novo", Type: model.AgentTypeA2A, Config: "{}"},
-		// card_url vazio: sob a semântica parcial isso significa "mantenha", não "apague"
+		// empty card_url means "keep" under partial-update semantics
 		{Name: "nome_novo", Type: model.AgentTypeA2A, CardURL: "", Config: "{}"},
 	} {
 		if _, err := svc.Update(context.Background(), payload, existing.ID); err != nil {
 			t.Errorf("partial update %+v was rejected: %v", payload, err)
 		}
+	}
+}
+
+// Whitespace is not a zero value for GORM, so it must be refused before the write.
+func TestUpdate_WhitespaceCardURLOnAnA2AAgentIsRejected(t *testing.T) {
+	repo := &cardURLFakeRepo{}
+	svc := serviceForCardURLValidation(repo)
+
+	existing := &model.Agent{
+		ID:      uuid.New(),
+		Name:    "agente_a2a",
+		Type:    model.AgentTypeA2A,
+		CardURL: "https://parceiro.example.com/.well-known/agent.json",
+		Config:  "{}",
+	}
+	repo.stored = existing
+
+	_, err := svc.Update(context.Background(), &model.Agent{
+		Name:    "agente_a2a",
+		Type:    model.AgentTypeA2A,
+		CardURL: "   ",
+		Config:  "{}",
+	}, existing.ID)
+
+	assertCardURLRejection(t, err)
+
+	if repo.updateCalled {
+		t.Error("a whitespace card_url reached the repository")
+	}
+	if repo.stored.CardURL != existing.CardURL {
+		t.Errorf("stored card_url became %q", repo.stored.CardURL)
 	}
 }
 
@@ -313,8 +302,26 @@ func TestImportAgents_RejectsA2AWithoutCardURLAndImportsNothing(t *testing.T) {
 	}
 }
 
-// The regression a validation that is too broad would cause: no other type carries a
-// card_url, and every one of them has to stay creatable without it.
+// A rejected entry leaves the whole batch unwritten.
+func TestImportAgents_BatchWithAnInvalidA2AEntryImportsNothing(t *testing.T) {
+	repo := &cardURLFakeRepo{}
+	svc := serviceForCardURLValidation(repo)
+
+	_, err := svc.ImportAgentsFromJSON(context.Background(), model.AgentImportRequest{
+		AgentData: []map[string]interface{}{
+			{"name": "llm_ok", "type": "llm", "model": "openai/gpt-4.1-mini"},
+			{"name": "sem_card_url", "type": "a2a"},
+		},
+	})
+
+	assertCardURLRejection(t, err)
+
+	if repo.createCalled {
+		t.Error("an entry before the rejected one was written")
+	}
+}
+
+// Other types stay creatable without card_url.
 func TestValidateCardURL_OtherTypesWithoutCardURLStayAllowed(t *testing.T) {
 	for _, agentType := range []string{
 		model.AgentTypeLLM,
@@ -342,11 +349,7 @@ func TestValidateCardURL_A2AWithCardURLPasses(t *testing.T) {
 	}
 }
 
-// Deliberately NOT enforced: the API schema of the processor demands the
-// /.well-known/agent.json suffix (schemas.py:102-108), but its execution path does not,
-// and the core does something stronger at create time — it fetches the card and fails if
-// the url does not serve one. Matching the string would reject a card served at another
-// path that actually works. The divergence is recorded rather than hidden.
+// The /.well-known/agent.json suffix is not enforced; create fetches the card instead.
 func TestValidateCardURL_SuffixIsNotEnforcedHere(t *testing.T) {
 	err := validateCardURLForType(&model.Agent{
 		Name:    "agente_a2a",
