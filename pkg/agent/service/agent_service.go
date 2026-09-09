@@ -28,6 +28,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// Same wording as processor/a2a.go, so both refusals read alike.
+const cardURLRequiredMessage = "card_url is required for a2a type agents"
+
 // Persisted onto a malformed agent coerced to LLM, so a retired id here lands in
 // the customer's data. Prefixed: LiteLLM only guesses bare names it already knows.
 const defaultRepairModel = "openai/gpt-5.6-luna"
@@ -143,6 +146,10 @@ func (s *agentService) validateAgent(ctx context.Context, request *model.Agent, 
 		return err
 	}
 
+	if err := validateCardURLForType(request); err != nil {
+		return err
+	}
+
 	return s.validateRelatedEntities(ctx, request, isCreate)
 }
 
@@ -159,7 +166,16 @@ func (s *agentService) validateAgentUpdate(ctx context.Context, current, request
 		merged.Model = current.Model
 	}
 
+	// Exact empties only: GORM writes whitespace, so it must not fall back.
+	if merged.CardURL == "" {
+		merged.CardURL = current.CardURL
+	}
+
 	if err := validateModelForType(&merged); err != nil {
+		return err
+	}
+
+	if err := validateCardURLForType(&merged); err != nil {
 		return err
 	}
 
@@ -186,6 +202,19 @@ func wrapValidationError(prefix string, err error) error {
 	}
 
 	return errors.New(prefix + err.Error())
+}
+
+// Only a2a needs card_url; the processor refuses to run one without it.
+func validateCardURLForType(request *model.Agent) error {
+	if request.Type != model.AgentTypeA2A {
+		return nil
+	}
+
+	if strings.TrimSpace(request.CardURL) != "" {
+		return nil
+	}
+
+	return apiErrors.New(apiErrors.ValidationError, cardURLRequiredMessage, http.StatusBadRequest)
 }
 
 func (s *agentService) validateCreate(ctx context.Context, request *model.Agent) error {
@@ -710,7 +739,8 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 	folderID := request.FolderID
 	agentsData := request.AgentData
 
-	importedAgents := make([]*model.Agent, 0, len(agentsData))
+	// Validate every entry before the first write.
+	agents := make([]*model.Agent, 0, len(agentsData))
 
 	for _, data := range agentsData {
 		agent := &model.Agent{
@@ -755,6 +785,16 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 			}
 		}
 
+		if err := validateCardURLForType(agent); err != nil {
+			return nil, err
+		}
+
+		agents = append(agents, agent)
+	}
+
+	importedAgents := make([]*model.Agent, 0, len(agents))
+
+	for _, agent := range agents {
 		if err := s.validateCreate(ctx, agent); err != nil {
 			return nil, err
 		}

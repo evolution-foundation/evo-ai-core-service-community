@@ -184,6 +184,9 @@ func TestValidateCreate_FlowTypesWithoutModelStayAllowed(t *testing.T) {
 		model.AgentTypeExternal,
 	} {
 		agent := model.Agent{Name: "agente", Type: agentType, Config: `{}`}
+		if agentType == model.AgentTypeA2A {
+			agent.CardURL = "https://parceiro.example.com/.well-known/agent.json"
+		}
 		if err := svc.validateCreate(context.Background(), &agent); err != nil {
 			t.Errorf("type %q was rejected for having no model: %v", agentType, err)
 		}
