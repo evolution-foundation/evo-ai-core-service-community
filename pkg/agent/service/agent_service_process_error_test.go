@@ -20,6 +20,7 @@ import (
 	mcpmodel "evo-ai-core-service/pkg/mcp_server/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -200,6 +201,12 @@ func TestCreate_ConfigTheProcessorRejectsIs400NamingTheField(t *testing.T) {
 			wantInMessage: []string{"mcp_servers", "MCP server not found", missingServer},
 		},
 		{
+			name: "MCP server entry without an id",
+			agent: model.Agent{Name: "llm", Type: model.AgentTypeLLM, Model: "openai/gpt-4.1-mini",
+				Config: `{"mcp_servers":[{"environments":{}}]}`},
+			wantInMessage: []string{"server at index 0 has no id"},
+		},
+		{
 			name: "preload_memory without load_memory",
 			agent: model.Agent{Name: "llm", Type: model.AgentTypeLLM, Model: "openai/gpt-4.1-mini",
 				Config: `{"preload_memory":true}`},
@@ -250,8 +257,12 @@ func TestCreate_MCPLookupOutageStaysAServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("the request was accepted")
 	}
-	if _, _, status := apierrors.HandleError(err); status != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500 for a lookup outage", status)
+	code, message, status := apierrors.HandleError(err)
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d %s, want 500 for a lookup outage", status, code)
+	}
+	if strings.Contains(message, "invalid mcp_servers") {
+		t.Errorf("a failure of ours is announced as invalid input: %q", message)
 	}
 	if repo.createCalled {
 		t.Error("the agent was written despite the failed lookup")
@@ -361,5 +372,55 @@ func TestImportAgents_EntryWhoseCardURLAnswers404ImportsNothing(t *testing.T) {
 
 	if repo.createCalled {
 		t.Error("an entry before the rejected one was written")
+	}
+}
+
+// Raises what Postgres raises when the unique index on name is hit.
+type duplicateNameRepo struct {
+	cardURLFakeRepo
+	taken string
+}
+
+func (f *duplicateNameRepo) Create(ctx context.Context, agent model.Agent) (*model.Agent, error) {
+	if agent.Name == f.taken {
+		return nil, &pgconn.PgError{
+			Code:           "23505",
+			Message:        `duplicate key value violates unique constraint "idx_evo_core_agents_name_unique"`,
+			ConstraintName: "idx_evo_core_agents_name_unique",
+			TableName:      "evo_core_agents",
+		}
+	}
+	return f.cardURLFakeRepo.Create(ctx, agent)
+}
+
+// A name already taken is the caller's to fix, and the import is the same write as Create.
+func TestImportAgents_NameAlreadyTakenAnswersTheSameAsCreate(t *testing.T) {
+	entry := []map[string]interface{}{
+		{"name": "ja_existe", "type": "llm", "model": "openai/gpt-4.1-mini"},
+	}
+
+	importRepo := &duplicateNameRepo{taken: "ja_existe"}
+	importSvc := serviceForProcessErrors(&importRepo.cardURLFakeRepo, nil)
+	importSvc.agentRepository = importRepo
+
+	_, importErr := importSvc.ImportAgentsFromJSON(context.Background(), model.AgentImportRequest{AgentData: entry})
+
+	createRepo := &duplicateNameRepo{taken: "ja_existe"}
+	createSvc := serviceForProcessErrors(&createRepo.cardURLFakeRepo, nil)
+	createSvc.agentRepository = createRepo
+
+	_, createErr := createSvc.Create(context.Background(), model.Agent{
+		Name:   "ja_existe",
+		Type:   model.AgentTypeLLM,
+		Model:  "openai/gpt-4.1-mini",
+		Config: "{}",
+	})
+
+	wantCode, wantMessage, wantStatus := apierrors.HandleError(createErr)
+	assertClientError(t, importErr, wantStatus, wantCode, wantMessage)
+
+	_, message, _ := apierrors.HandleError(importErr)
+	if strings.Contains(message, "SQLSTATE") || strings.Contains(message, "idx_evo_core_agents_name_unique") {
+		t.Errorf("the constraint the driver raised was echoed back: %q", message)
 	}
 }

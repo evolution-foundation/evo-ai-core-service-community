@@ -266,12 +266,12 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 	for i, server := range serverList {
 		serverMap, ok := server.(map[string]interface{})
 		if !ok {
-			return nil, invalidf("server %d must be an object", i)
+			return nil, invalidf("server at index %d must be an object", i)
 		}
 
 		serverID, ok := serverMap["id"].(string)
 		if !ok {
-			return nil, invalidf("server %d has no id", i)
+			return nil, invalidf("server at index %d has no id", i)
 		}
 
 		// Check if this is an OAuth integration (string ID) or custom MCP server (UUID)
@@ -357,7 +357,7 @@ func (p ConfigProcessor) processTools(tools interface{}) ([]map[string]interface
 	for i, tool := range toolList {
 		toolMap, ok := tool.(map[string]interface{})
 		if !ok {
-			return nil, invalidf("tool %d must be an object", i)
+			return nil, invalidf("tool at index %d must be an object", i)
 		}
 
 		processedTool := map[string]interface{}{

@@ -800,7 +800,7 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 	for _, agent := range agents {
 		createdAgent, err := s.agentRepository.Create(ctx, *agent)
 		if err != nil {
-			return nil, err
+			return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 		}
 
 		importedAgents = append(importedAgents, createdAgent)
