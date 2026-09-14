@@ -128,27 +128,37 @@ func TestCreate_A2AWhoseCardURLIsUnreachableIsRejectedWithTheFetchReason(t *test
 	}
 }
 
-func TestCreate_A2AWhoseCardURLServesHTMLIsRejectedWithTheFetchReason(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("<html>" + cardBodyMarker + "</html>"))
-	}))
-	t.Cleanup(server.Close)
+// A 200 is not enough: the body has to be a card, or the agent is saved with nothing to run.
+func TestCreate_A2AWhoseCardURLAnswers200WithoutACardIsRejected(t *testing.T) {
+	for name, body := range map[string]string{
+		"html":         "<html>" + cardBodyMarker + "</html>",
+		"empty body":   "",
+		"json null":    "null",
+		"empty object": "{}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
 
-	repo := &cardURLFakeRepo{}
-	svc := serviceForProcessErrors(repo, nil)
+			repo := &cardURLFakeRepo{}
+			svc := serviceForProcessErrors(repo, nil)
 
-	_, err := svc.Create(context.Background(), model.Agent{
-		Name:    "agente_a2a",
-		Type:    model.AgentTypeA2A,
-		CardURL: server.URL,
-		Config:  "{}",
-	})
+			_, err := svc.Create(context.Background(), model.Agent{
+				Name:    "agente_a2a",
+				Type:    model.AgentTypeA2A,
+				CardURL: server.URL,
+				Config:  "{}",
+			})
 
-	assertClientError(t, err, http.StatusUnprocessableEntity, apierrors.BusinessRuleViolation,
-		"failed to fetch agent card", server.URL, "did not return a JSON agent card")
+			assertClientError(t, err, http.StatusUnprocessableEntity, apierrors.BusinessRuleViolation,
+				"failed to fetch agent card", server.URL, "did not return a JSON agent card")
 
-	if repo.createCalled {
-		t.Error("an agent without a card was written")
+			if repo.createCalled {
+				t.Error("an agent without a card was written")
+			}
+		})
 	}
 }
 

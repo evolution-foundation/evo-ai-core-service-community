@@ -36,15 +36,28 @@ func (c *client) FetchAgentCard(ctx context.Context, cardURL string) (map[string
 		case errors.As(err, &statusErr):
 			reason = fmt.Sprintf("%s responded with HTTP %d", cardURL, statusErr.Code)
 		case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
-			reason = fmt.Sprintf("%s did not return a JSON agent card", cardURL)
+			reason = notACard(cardURL)
 		}
 
-		return nil, apiErrors.New(
-			apiErrors.BusinessRuleViolation,
-			"failed to fetch agent card: "+reason,
-			http.StatusUnprocessableEntity,
-		)
+		return nil, cardFetchError(reason)
+	}
+
+	// DoGetJSON decodes an empty body or `null` into a nil map without an error.
+	if response == nil || len(*response) == 0 {
+		return nil, cardFetchError(notACard(cardURL))
 	}
 
 	return *response, nil
+}
+
+func notACard(cardURL string) string {
+	return fmt.Sprintf("%s did not return a JSON agent card", cardURL)
+}
+
+func cardFetchError(reason string) error {
+	return apiErrors.New(
+		apiErrors.BusinessRuleViolation,
+		"failed to fetch agent card: "+reason,
+		http.StatusUnprocessableEntity,
+	)
 }
