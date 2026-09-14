@@ -100,13 +100,13 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 	// agent already carries, or a valid partial update is rejected.
 	if preload, ok := effectiveValue(agentConfig, existingConfig, "preload_memory").(bool); ok && preload {
 		if load, ok := effectiveValue(agentConfig, existingConfig, "load_memory").(bool); !ok || !load {
-			return fmt.Errorf("preload_memory requires load_memory to be enabled")
+			return invalidf("preload_memory requires load_memory to be enabled")
 		}
 	}
 
 	if schema, exists := agentConfig["output_schema"]; exists && schema != nil {
 		if err := p.validateOutputSchema(schema); err != nil {
-			return fmt.Errorf("invalid output_schema: %w", err)
+			return withPrefix("invalid output_schema: ", err)
 		}
 	}
 
@@ -123,7 +123,7 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 	if servers, exists := agentConfig["mcp_servers"]; exists && servers != nil {
 		processedServers, err := p.processMCPServers(ctx, servers)
 		if err != nil {
-			return fmt.Errorf("failed to process MCP servers: %w", err)
+			return withPrefix("invalid mcp_servers: ", err)
 		}
 		processedConfig["mcp_servers"] = processedServers
 	}
@@ -131,7 +131,7 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 	if tools, exists := agentConfig["tools"]; exists && tools != nil {
 		processedTools, err := p.processTools(tools)
 		if err != nil {
-			return fmt.Errorf("failed to process tools: %w", err)
+			return withPrefix("invalid tools: ", err)
 		}
 		processedConfig["tools"] = processedTools
 	}
@@ -141,7 +141,7 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 	if agent.Type == "external" {
 		provider, ok := effectiveValue(agentConfig, existingConfig, "provider").(string)
 		if !ok || provider == "" {
-			return fmt.Errorf("provider is required for external type agents")
+			return invalidf("provider is required for external type agents")
 		}
 		validProviders := []string{"flowise", "n8n", "typebot", "dify", "openai"}
 		valid := false
@@ -152,7 +152,7 @@ func (p ConfigProcessor) ProcessAgentConfig(ctx context.Context, agent *model.Ag
 			}
 		}
 		if !valid {
-			return fmt.Errorf("invalid provider: %s. Must be one of: %v", provider, validProviders)
+			return invalidf("invalid provider: %s. Must be one of: %v", provider, validProviders)
 		}
 		// Preserve provider in config
 		processedConfig["provider"] = provider
@@ -198,7 +198,7 @@ func effectiveValue(requestConfig, existingConfig map[string]interface{}, key st
 func (p ConfigProcessor) validateOutputSchema(schema interface{}) error {
 	schemaMap, ok := schema.(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("schema must be a dictionary")
+		return invalidf("schema must be a dictionary")
 	}
 
 	// Allow empty schema objects
@@ -218,22 +218,22 @@ func (p ConfigProcessor) validateOutputSchema(schema interface{}) error {
 	for fieldName, fieldConfig := range schemaMap {
 		fieldConfigMap, ok := fieldConfig.(map[string]interface{})
 		if !ok {
-			return fmt.Errorf("field config for '%s' must be a dictionary", fieldName)
+			return invalidf("field config for '%s' must be a dictionary", fieldName)
 		}
 
 		fieldType, exists := fieldConfigMap["type"]
 		if !exists {
-			return fmt.Errorf("field '%s' must have a 'type' property", fieldName)
+			return invalidf("field '%s' must have a 'type' property", fieldName)
 		}
 
 		fieldTypeStr, ok := fieldType.(string)
 		if !ok {
-			return fmt.Errorf("field '%s' type must be a string", fieldName)
+			return invalidf("field '%s' type must be a string", fieldName)
 		}
 
 		if !validTypes[fieldTypeStr] {
 			validTypesList := []string{"string", "integer", "number", "boolean", "array", "object"}
-			return fmt.Errorf("field '%s' has invalid type '%s'. Valid types: %v", fieldName, fieldTypeStr, validTypesList)
+			return invalidf("field '%s' has invalid type '%s'. Valid types: %v", fieldName, fieldTypeStr, validTypesList)
 		}
 	}
 
@@ -243,7 +243,7 @@ func (p ConfigProcessor) validateOutputSchema(schema interface{}) error {
 func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interface{}) ([]map[string]interface{}, error) {
 	serverList, ok := servers.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("mcp_servers must be a list")
+		return nil, invalidf("mcp_servers must be a list")
 	}
 
 	// OAuth integration IDs that don't require database lookup
@@ -263,15 +263,15 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 	}
 
 	processedServers := make([]map[string]interface{}, 0)
-	for _, server := range serverList {
+	for i, server := range serverList {
 		serverMap, ok := server.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("invalid server configuration")
+			return nil, invalidf("server %d must be an object", i)
 		}
 
 		serverID, ok := serverMap["id"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server id is required")
+			return nil, invalidf("server %d has no id", i)
 		}
 
 		// Check if this is an OAuth integration (string ID) or custom MCP server (UUID)
@@ -279,7 +279,7 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 			// OAuth integration - validate structure but don't require database lookup
 			environments, ok := serverMap["environments"].(map[string]interface{})
 			if !ok {
-				return nil, fmt.Errorf("server environments must be a dictionary")
+				return nil, invalidf("environments of server %s must be a dictionary", serverID)
 			}
 
 			processedServers = append(processedServers, map[string]interface{}{
@@ -293,17 +293,20 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 		// Custom MCP server - requires UUID and database lookup
 		uuid, err := uuid.Parse(serverID)
 		if err != nil {
-			return nil, fmt.Errorf("invalid server id: %v (must be UUID or OAuth integration: github, notion, stripe, linear, paypal, hubspot, monday, atlassian, asana, canva, supabase, google_calendar)", err)
+			return nil, invalidf("invalid server id: %v (must be UUID or OAuth integration: github, notion, stripe, linear, paypal, hubspot, monday, atlassian, asana, canva, supabase, google_calendar)", err)
 		}
 
 		mcpServer, err := p.getMCPServer(ctx, uuid)
+		if isNotFound(err) {
+			return nil, invalidf("MCP server not found: %s", serverID)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("MCP server not found: %s", serverID)
+			return nil, fmt.Errorf("failed to look up MCP server %s: %w", serverID, err)
 		}
 
 		environments, ok := serverMap["environments"].(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("server environments must be a dictionary")
+			return nil, invalidf("environments of server %s must be a dictionary", serverID)
 		}
 
 		// An env var whose value lives in the vault is referenced by name here
@@ -322,7 +325,7 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 			if _, referenced := credentialRefs[envKey]; referenced {
 				continue
 			}
-			return nil, fmt.Errorf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
+			return nil, invalidf("environment variable '%s' not provided for MCP server %s", envKey, mcpServer.Name)
 		}
 
 		processed := map[string]interface{}{
@@ -347,14 +350,14 @@ func (p ConfigProcessor) processMCPServers(ctx context.Context, servers interfac
 func (p ConfigProcessor) processTools(tools interface{}) ([]map[string]interface{}, error) {
 	toolList, ok := tools.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("tools must be a list")
+		return nil, invalidf("tools must be a list")
 	}
 
 	processedTools := make([]map[string]interface{}, 0)
-	for _, tool := range toolList {
+	for i, tool := range toolList {
 		toolMap, ok := tool.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("invalid tool configuration")
+			return nil, invalidf("tool %d must be an object", i)
 		}
 
 		processedTool := map[string]interface{}{

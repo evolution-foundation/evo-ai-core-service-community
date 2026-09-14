@@ -111,7 +111,7 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	}
 
 	if err := s.processAgentCreate(ctx, &request); err != nil {
-		return nil, errors.New("Failed to process agent")
+		return nil, err
 	}
 
 	agent, err := s.agentRepository.Create(ctx, request)
@@ -240,7 +240,7 @@ func (s *agentService) validateRelatedEntities(ctx context.Context, request *mod
 func (s *agentService) processAgentCreate(ctx context.Context, request *model.Agent) error {
 	// Pass nil for existingConfig since this is a CREATE operation
 	if err := s.configProcessor.ProcessAgentConfig(ctx, request, nil); err != nil {
-		return errors.New("Failed to process agent config")
+		return err
 	}
 
 	switch request.Type {
@@ -260,7 +260,7 @@ func (s *agentService) processAgentCreate(ctx context.Context, request *model.Ag
 	case model.AgentTypeSequential, model.AgentTypeParallel, model.AgentTypeLoop:
 		return s.flowProcessor.Create(ctx, request)
 	default:
-		return errors.New("Unsupported agent type: " + request.Type)
+		return apiErrors.New(apiErrors.ValidationError, "Unsupported agent type: "+request.Type, http.StatusBadRequest)
 	}
 }
 
@@ -275,8 +275,7 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 	}
 
 	if err := s.processAgentUpdate(ctx, current, request); err != nil {
-		// Include the original error message for better debugging
-		return nil, errors.New(fmt.Sprintf("Failed to process agent: %v", err))
+		return nil, err
 	}
 
 	agent, err := s.agentRepository.Update(ctx, request, id)
@@ -308,7 +307,7 @@ func (s *agentService) processAgentUpdate(ctx context.Context, current, request 
 	dropHydratedCopies(currentConfig)
 
 	if err := s.configProcessor.ProcessAgentConfig(ctx, request, currentConfig); err != nil {
-		return errors.New(fmt.Sprintf("Failed to process agent config: %v", err))
+		return err
 	}
 
 	switch {
@@ -328,7 +327,7 @@ func (s *agentService) processAgentUpdate(ctx context.Context, current, request 
 	case isFlowType(request.Type):
 		return s.flowProcessor.Update(ctx, current, request)
 	default:
-		return errors.New("Unsupported agent type: " + request.Type)
+		return apiErrors.New(apiErrors.ValidationError, "Unsupported agent type: "+request.Type, http.StatusBadRequest)
 	}
 }
 
@@ -749,13 +748,13 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 
 		name, ok := data["name"].(string)
 		if !ok {
-			return nil, errors.New("Invalid agent data: name is required and must be a string")
+			return nil, apiErrors.New(apiErrors.ValidationError, "Invalid agent data: name is required and must be a string", http.StatusBadRequest)
 		}
 		agent.Name = name
 
 		agentType, ok := data["type"].(string)
 		if !ok {
-			return nil, errors.New("Invalid agent data: type is required and must be a string")
+			return nil, apiErrors.New(apiErrors.ValidationError, "Invalid agent data: type is required and must be a string", http.StatusBadRequest)
 		}
 		agent.Type = agentType
 
@@ -785,7 +784,11 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 			}
 		}
 
-		if err := validateCardURLForType(agent); err != nil {
+		if err := s.validateCreate(ctx, agent); err != nil {
+			return nil, err
+		}
+
+		if err := s.processAgentCreate(ctx, agent); err != nil {
 			return nil, err
 		}
 
@@ -795,14 +798,6 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 	importedAgents := make([]*model.Agent, 0, len(agents))
 
 	for _, agent := range agents {
-		if err := s.validateCreate(ctx, agent); err != nil {
-			return nil, err
-		}
-
-		if err := s.processAgentCreate(ctx, agent); err != nil {
-			return nil, err
-		}
-
 		createdAgent, err := s.agentRepository.Create(ctx, *agent)
 		if err != nil {
 			return nil, err

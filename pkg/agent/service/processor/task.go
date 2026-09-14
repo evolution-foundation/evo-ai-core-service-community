@@ -2,7 +2,6 @@ package processor
 
 import (
 	"context"
-	"fmt"
 
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/model"
@@ -25,7 +24,7 @@ func NewTaskProcessor(validator *validator.AgentValidator, generateAPIKey func()
 func (p *TaskProcessor) Create(ctx context.Context, agent *model.Agent) error {
 	agentConfig := stringutils.JSONToInterfaceMap(agent.Config)
 	if agentConfig == nil {
-		return fmt.Errorf("invalid configuration: must be an object with tasks")
+		return invalidf("invalid configuration: must be an object with tasks")
 	}
 
 	if err := p.validator.ValidateTaskConfig(ctx, agentConfig); err != nil {
