@@ -66,15 +66,15 @@ func (h *apiKeyHandler) RegisterRoutesMiddleware(router gin.IRouter) {
 
 		// Create permissions
 		apiKeys.POST("",
-			permissionMiddleware.RequirePermission("ai_api_keys", "create"),
+			permissionMiddleware.RequirePermission("ai_api_keys", "write"),
 			h.Create)
 		apiKeys.POST("/",
-			permissionMiddleware.RequirePermission("ai_api_keys", "create"),
+			permissionMiddleware.RequirePermission("ai_api_keys", "write"),
 			h.Create)
 
 		// Update permissions
 		apiKeys.PUT("/:id",
-			permissionMiddleware.RequirePermission("ai_api_keys", "update"),
+			permissionMiddleware.RequirePermission("ai_api_keys", "write"),
 			h.Update)
 
 		// Delete permissions
