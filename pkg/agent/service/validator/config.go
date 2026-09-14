@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	apiErrors "evo-ai-core-service/internal/httpclient/errors"
+	errorsPostgres "evo-ai-core-service/internal/infra/postgres"
 	"evo-ai-core-service/pkg/agent/model"
 
 	"github.com/google/uuid"
@@ -48,7 +49,7 @@ func (v *AgentValidator) ValidateSubAgents(ctx context.Context, subAgents interf
 			return invalidf("sub-agent not found: %s", saID)
 		}
 		if err != nil {
-			return fmt.Errorf("failed to look up sub-agent %s: %w", saID, err)
+			return errorsPostgres.MapDBError(err, model.AgentErrors)
 		}
 	}
 	return nil
@@ -109,7 +110,7 @@ func (v *AgentValidator) validateTask(ctx context.Context, task interface{}) err
 		return invalidf("agent not found for task: %s", agentID)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to look up the agent of task %s: %w", agentID, err)
+		return errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
 	return nil

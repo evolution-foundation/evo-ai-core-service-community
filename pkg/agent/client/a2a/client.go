@@ -27,7 +27,9 @@ func NewClient() Client {
 func (c *client) FetchAgentCard(ctx context.Context, cardURL string) (map[string]interface{}, error) {
 	response, err := httpclient.DoGetJSON[map[string]interface{}](ctx, cardURL, nil, http.StatusOK)
 	if err != nil {
-		reason := err.Error()
+		// Transport errors stay generic: "connection refused" versus "i/o timeout"
+		// would map which internal hosts and ports exist.
+		reason := fmt.Sprintf("could not reach %s", cardURL)
 
 		var statusErr *httpclient.StatusError
 		var syntaxErr *json.SyntaxError

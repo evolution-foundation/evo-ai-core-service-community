@@ -43,15 +43,23 @@ func unreachableCardURL(t *testing.T) string {
 }
 
 func serviceForProcessErrors(repo *cardURLFakeRepo, getMCPServer func(context.Context, uuid.UUID) (*mcpmodel.McpServer, error)) *agentService {
+	return serviceWithLookups(repo, getMCPServer, func(_ context.Context, _ uuid.UUID) (*model.Agent, error) {
+		return nil, gorm.ErrRecordNotFound
+	})
+}
+
+func serviceWithLookups(
+	repo *cardURLFakeRepo,
+	getMCPServer func(context.Context, uuid.UUID) (*mcpmodel.McpServer, error),
+	getAgent func(context.Context, uuid.UUID) (*model.Agent, error),
+) *agentService {
 	if getMCPServer == nil {
 		getMCPServer = func(_ context.Context, _ uuid.UUID) (*mcpmodel.McpServer, error) {
 			return nil, errorsPostgres.MapDBError(gorm.ErrRecordNotFound, mcpmodel.MCPServerErrors)
 		}
 	}
 
-	agentValidator := validator.NewAgentValidator(func(ctx context.Context, id uuid.UUID) (*model.Agent, error) {
-		return nil, gorm.ErrRecordNotFound
-	})
+	agentValidator := validator.NewAgentValidator(getAgent)
 
 	return &agentService{
 		agentRepository:  repo,
@@ -121,7 +129,12 @@ func TestCreate_A2AWhoseCardURLIsUnreachableIsRejectedWithTheFetchReason(t *test
 	})
 
 	assertClientError(t, err, http.StatusUnprocessableEntity, apierrors.BusinessRuleViolation,
-		"failed to fetch agent card", cardURL)
+		"failed to fetch agent card", "could not reach "+cardURL)
+
+	_, message, _ := apierrors.HandleError(err)
+	if strings.Contains(message, "connection refused") || strings.Contains(message, "dial tcp") {
+		t.Errorf("the transport error was echoed back: %q", message)
+	}
 
 	if repo.createCalled {
 		t.Error("an agent without a card was written")
@@ -239,6 +252,34 @@ func TestCreate_MCPLookupOutageStaysAServerError(t *testing.T) {
 	}
 	if _, _, status := apierrors.HandleError(err); status != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 for a lookup outage", status)
+	}
+	if repo.createCalled {
+		t.Error("the agent was written despite the failed lookup")
+	}
+}
+
+func TestCreate_SubAgentLookupOutageStaysAServerErrorWithoutTheDriverText(t *testing.T) {
+	repo := &cardURLFakeRepo{}
+	driverText := "failed to connect to `host=db.internal user=evo_app database=evo_community`"
+	svc := serviceWithLookups(repo, nil, func(_ context.Context, _ uuid.UUID) (*model.Agent, error) {
+		return nil, errors.New(driverText)
+	})
+
+	_, err := svc.Create(context.Background(), model.Agent{
+		Name:   "fluxo",
+		Type:   model.AgentTypeSequential,
+		Config: `{"sub_agents":["` + uuid.New().String() + `"]}`,
+	})
+
+	if err == nil {
+		t.Fatal("the request was accepted")
+	}
+	_, message, status := apierrors.HandleError(err)
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 for a lookup outage", status)
+	}
+	if strings.Contains(message, "db.internal") {
+		t.Errorf("the driver error was echoed back: %q", message)
 	}
 	if repo.createCalled {
 		t.Error("the agent was written despite the failed lookup")
