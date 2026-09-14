@@ -2,7 +2,6 @@ package processor
 
 import (
 	"context"
-	"fmt"
 
 	"evo-ai-core-service/internal/utils/stringutils"
 	"evo-ai-core-service/pkg/agent/model"
@@ -25,7 +24,7 @@ func NewFlowProcessor(validator *validator.AgentValidator, generateAPIKey func()
 func (p *FlowProcessor) Create(ctx context.Context, agent *model.Agent) error {
 	agentConfig := stringutils.JSONToInterfaceMap(agent.Config)
 	if agentConfig == nil {
-		return fmt.Errorf("invalid configuration: must be an object with sub_agents for %s agent", agent.Type)
+		return invalidf("invalid configuration: must be an object with sub_agents for %s agent", agent.Type)
 	}
 
 	if err := p.validator.ValidateFlowConfig(ctx, agentConfig, agent.Type); err != nil {
