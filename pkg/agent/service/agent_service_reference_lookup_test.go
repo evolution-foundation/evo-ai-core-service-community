@@ -46,16 +46,6 @@ func (f lookupApiKeyService) GetByID(_ context.Context, id uuid.UUID) (*apiKeyMo
 	return &apiKeyModel.ApiKey{ID: id}, nil
 }
 
-// Answers the way the GORM repository does when the row is not there.
-type missingAgentRepo struct {
-	cardURLFakeRepo
-	err error
-}
-
-func (f *missingAgentRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Agent, error) {
-	return nil, f.err
-}
-
 func serviceForReferenceLookups(repo *cardURLFakeRepo, folderErr, apiKeyErr error) *agentService {
 	svc := serviceForProcessErrors(repo, nil)
 	svc.folderService = lookupFolderService{err: folderErr}
@@ -176,7 +166,7 @@ func TestImportAgents_EntryWithMissingApiKeyIs400NamingTheFieldAndImportsNothing
 }
 
 func TestUpdate_AgentThatDoesNotExistIs404(t *testing.T) {
-	repo := &missingAgentRepo{err: gorm.ErrRecordNotFound}
+	repo := &agentLookupRepo{getErr: gorm.ErrRecordNotFound}
 	svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, nil, nil)
 	svc.agentRepository = repo
 
@@ -231,7 +221,7 @@ func TestCreate_ReferenceLookupOutageStaysAServerError(t *testing.T) {
 }
 
 func TestUpdate_AgentLookupOutageStaysAServerError(t *testing.T) {
-	repo := &missingAgentRepo{err: errors.New(lookupDriverText)}
+	repo := &agentLookupRepo{getErr: errors.New(lookupDriverText)}
 	svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, nil, nil)
 	svc.agentRepository = repo
 
@@ -239,4 +229,89 @@ func TestUpdate_AgentLookupOutageStaysAServerError(t *testing.T) {
 	_, err := svc.Update(context.Background(), &edit, uuid.New())
 
 	assertLookupOutage(t, err, repo.updateCalled)
+}
+
+// Fails the read the way the GORM repository does; cardURLFakeRepo's miss is a plain error.
+type agentLookupRepo struct {
+	cardURLFakeRepo
+	getErr error
+}
+
+func (f *agentLookupRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return f.cardURLFakeRepo.GetByID(ctx, id)
+}
+
+func TestAssignFolder_MissingFolderIs400NamingTheFieldAndTheRowIsIntact(t *testing.T) {
+	repo := &agentLookupRepo{}
+	svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, gorm.ErrRecordNotFound, nil)
+	svc.agentRepository = repo
+	existing := storedLLMAgent()
+	repo.stored = existing
+	folderID := uuid.New()
+
+	_, err := svc.AssignFolder(context.Background(), existing.ID, &model.Agent{FolderID: &folderID})
+
+	assertClientError(t, err, http.StatusBadRequest, apierrors.ValidationError, "folder_id", "Folder not found")
+	if repo.updateCalled {
+		t.Error("the agent was moved into a folder that does not exist")
+	}
+}
+
+func TestAssignFolder_AgentThatDoesNotExistIs404(t *testing.T) {
+	repo := &agentLookupRepo{getErr: gorm.ErrRecordNotFound}
+	svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, nil, nil)
+	svc.agentRepository = repo
+	folderID := uuid.New()
+
+	_, err := svc.AssignFolder(context.Background(), uuid.New(), &model.Agent{FolderID: &folderID})
+
+	assertClientError(t, err, http.StatusNotFound, apierrors.AgentNotFound)
+}
+
+func TestAssignFolder_LookupOutageStaysAServerError(t *testing.T) {
+	outage := &pgconn.PgError{Code: "08006", Message: lookupDriverText}
+
+	t.Run("agent", func(t *testing.T) {
+		repo := &agentLookupRepo{getErr: outage}
+		svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, nil, nil)
+		svc.agentRepository = repo
+		folderID := uuid.New()
+
+		_, err := svc.AssignFolder(context.Background(), uuid.New(), &model.Agent{FolderID: &folderID})
+
+		assertLookupOutage(t, err, repo.updateCalled)
+	})
+
+	t.Run("folder", func(t *testing.T) {
+		repo := &agentLookupRepo{}
+		svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, outage, nil)
+		svc.agentRepository = repo
+		existing := storedLLMAgent()
+		repo.stored = existing
+		folderID := uuid.New()
+
+		_, err := svc.AssignFolder(context.Background(), existing.ID, &model.Agent{FolderID: &folderID})
+
+		assertLookupOutage(t, err, repo.updateCalled)
+	})
+}
+
+func TestListAgentsByFolderID_MissingFolderIs404(t *testing.T) {
+	svc := serviceForReferenceLookups(&cardURLFakeRepo{}, gorm.ErrRecordNotFound, nil)
+
+	_, err := svc.ListAgentsByFolderID(context.Background(), uuid.New(), 1, 20)
+
+	assertClientError(t, err, http.StatusNotFound, apierrors.FolderNotFound)
+}
+
+func TestListAgentsByFolderID_FolderLookupOutageStaysAServerError(t *testing.T) {
+	outage := &pgconn.PgError{Code: "08006", Message: lookupDriverText}
+	svc := serviceForReferenceLookups(&cardURLFakeRepo{}, outage, nil)
+
+	_, err := svc.ListAgentsByFolderID(context.Background(), uuid.New(), 1, 20)
+
+	assertLookupOutage(t, err, false)
 }

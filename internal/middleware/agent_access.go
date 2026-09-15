@@ -50,7 +50,8 @@ func (a *agentAccessMiddleware) GetAgentAccessMiddleware() gin.HandlerFunc {
 		}
 
 		if errAgentID != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID"})
+			response.ErrorResponse(c, apiErrors.BadRequest, "Invalid agent ID", nil, http.StatusBadRequest)
+			c.Abort()
 			return
 		}
 

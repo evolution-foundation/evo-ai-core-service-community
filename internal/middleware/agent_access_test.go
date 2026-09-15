@@ -102,6 +102,9 @@ func TestAgentAccess_MalformedIDStays400(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
+	if code, _ := errorCode(t, recorder); code != apiErrors.BadRequest {
+		t.Errorf("code = %q, want %q", code, apiErrors.BadRequest)
+	}
 	if reached {
 		t.Error("the handler ran for a malformed id")
 	}
