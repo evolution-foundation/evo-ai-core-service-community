@@ -224,17 +224,25 @@ func (s *agentService) validateCreate(ctx context.Context, request *model.Agent)
 func (s *agentService) validateRelatedEntities(ctx context.Context, request *model.Agent, isCreate bool) error {
 	if request.FolderID != nil {
 		if _, err := s.folderService.GetByID(ctx, *request.FolderID); err != nil {
-			return err
+			return referenceLookupError("folder_id", err)
 		}
 	}
 
 	if request.ApiKeyID != nil {
 		if _, err := s.apiKeyService.GetByID(ctx, *request.ApiKeyID); err != nil {
-			return err
+			return referenceLookupError("api_key_id", err)
 		}
 	}
 
 	return nil
+}
+
+func referenceLookupError(field string, err error) error {
+	if !errorsPostgres.IsRecordNotFound(err) {
+		return err
+	}
+
+	return apiErrors.New(apiErrors.ValidationError, field+": "+err.Error(), http.StatusBadRequest)
 }
 
 func (s *agentService) processAgentCreate(ctx context.Context, request *model.Agent) error {
@@ -267,6 +275,9 @@ func (s *agentService) processAgentCreate(ctx context.Context, request *model.Ag
 func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid.UUID) (*model.Agent, error) {
 	current, err := s.GetByID(ctx, id)
 	if err != nil {
+		if errorsPostgres.IsRecordNotFound(err) {
+			return nil, apiErrors.New(apiErrors.AgentNotFound, "Agent not found", http.StatusNotFound)
+		}
 		return nil, errors.New("Failed to get current agent")
 	}
 
@@ -716,7 +727,7 @@ func (s *agentService) ImportAgents(ctx context.Context, request model.AgentImpo
 	if request.FolderID != nil {
 		_, err := s.folderService.GetByID(ctx, *request.FolderID)
 		if err != nil {
-			return nil, err
+			return nil, referenceLookupError("folder_id", err)
 		}
 	}
 
@@ -812,7 +823,11 @@ func (s *agentService) ImportAgentsFromJSON(ctx context.Context, request model.A
 func (s *agentService) AssignFolder(ctx context.Context, id uuid.UUID, request *model.Agent) (*model.Agent, error) {
 	agent, err := s.agentRepository.GetByID(ctx, id)
 	if err != nil {
-		return nil, errors.New("Agent not found")
+		mapped := errorsPostgres.MapDBError(err, model.AgentErrors)
+		if errorsPostgres.IsRecordNotFound(mapped) {
+			return nil, apiErrors.New(apiErrors.AgentNotFound, "Agent not found", http.StatusNotFound)
+		}
+		return nil, mapped
 	}
 
 	if request.FolderID == nil {
@@ -826,12 +841,12 @@ func (s *agentService) AssignFolder(ctx context.Context, id uuid.UUID, request *
 
 	_, err = s.folderService.GetByID(ctx, *request.FolderID)
 	if err != nil {
-		return nil, errors.New("Folder not found")
+		return nil, referenceLookupError("folder_id", err)
 	}
 
 	agent, err = s.agentRepository.Update(ctx, request, id)
 	if err != nil {
-		return nil, err
+		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
 	return agent, nil
@@ -840,7 +855,10 @@ func (s *agentService) AssignFolder(ctx context.Context, id uuid.UUID, request *
 func (s *agentService) ListAgentsByFolderID(ctx context.Context, folderId uuid.UUID, page int, pageSize int) (*model.AgentListResponse, error) {
 	_, err := s.folderService.GetByID(ctx, folderId)
 	if err != nil {
-		return nil, errors.New("Folder not found")
+		if errorsPostgres.IsRecordNotFound(err) {
+			return nil, apiErrors.New(apiErrors.FolderNotFound, "Folder not found", http.StatusNotFound)
+		}
+		return nil, err
 	}
 
 	agents, err := s.agentRepository.ListAgentsByFolderID(ctx, folderId, page, pageSize)

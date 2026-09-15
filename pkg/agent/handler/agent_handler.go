@@ -469,8 +469,7 @@ func readMultipartFile(file *multipart.FileHeader) ([]byte, error) {
 func (h *agentHandler) AssignFolder(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		code, message, httpCode := errors.HandleError(err)
-		response.ErrorResponse(c, code, message, nil, httpCode)
+		response.ErrorResponse(c, errors.BadRequest, "Invalid agent ID", nil, http.StatusBadRequest)
 		return
 	}
 
@@ -498,8 +497,7 @@ func (h *agentHandler) AssignFolder(c *gin.Context) {
 func (h *agentHandler) ListAgentsByFolderID(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		code, message, httpCode := errors.HandleError(err)
-		response.ErrorResponse(c, code, message, nil, httpCode)
+		response.ErrorResponse(c, errors.BadRequest, "Invalid folder ID", nil, http.StatusBadRequest)
 		return
 	}
 
