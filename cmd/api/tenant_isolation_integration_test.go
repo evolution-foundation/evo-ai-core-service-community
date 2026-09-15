@@ -236,7 +236,7 @@ func buildEngine(t *testing.T, db *gorm.DB, userID string) *gin.Engine {
 	})
 	installRuntimeScope(v1, db)
 	v1.GET("/probe", func(c *gin.Context) {
-		tx, ok := tenant.TxFromContext(c.Request.Context())
+		tx, ok := txFromContext(c.Request.Context())
 		if !ok {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no tx in ctx"})
 			return
