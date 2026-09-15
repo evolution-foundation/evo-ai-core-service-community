@@ -54,6 +54,11 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+func IsRecordNotFound(err error) bool {
+	var dbErr *Error
+	return errors.As(err, &dbErr) && dbErr.Code == ERR_RECORD_NOT_FOUND
+}
+
 func MapDBError(err error, customMessages []CustomErrorMessage) error {
 	if err == nil {
 		return nil

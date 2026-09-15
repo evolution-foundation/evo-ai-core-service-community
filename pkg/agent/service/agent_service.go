@@ -238,16 +238,11 @@ func (s *agentService) validateRelatedEntities(ctx context.Context, request *mod
 }
 
 func referenceLookupError(field string, err error) error {
-	if !isRecordNotFound(err) {
+	if !errorsPostgres.IsRecordNotFound(err) {
 		return err
 	}
 
 	return apiErrors.New(apiErrors.ValidationError, field+": "+err.Error(), http.StatusBadRequest)
-}
-
-func isRecordNotFound(err error) bool {
-	var dbErr *errorsPostgres.Error
-	return errors.As(err, &dbErr) && dbErr.Code == errorsPostgres.ERR_RECORD_NOT_FOUND
 }
 
 func (s *agentService) processAgentCreate(ctx context.Context, request *model.Agent) error {
@@ -280,7 +275,7 @@ func (s *agentService) processAgentCreate(ctx context.Context, request *model.Ag
 func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid.UUID) (*model.Agent, error) {
 	current, err := s.GetByID(ctx, id)
 	if err != nil {
-		if isRecordNotFound(err) {
+		if errorsPostgres.IsRecordNotFound(err) {
 			return nil, apiErrors.New(apiErrors.AgentNotFound, "Agent not found", http.StatusNotFound)
 		}
 		return nil, errors.New("Failed to get current agent")
