@@ -96,8 +96,22 @@ func (b *referenceIndexBuilder) ConsumersOf(ctx context.Context, id uuid.UUID) (
 	return consumers, nil
 }
 
+// labelledConsumer keeps a consumer beside its rendered label, so the sort
+// renders each label once instead of on both sides of every comparison.
+type labelledConsumer struct {
+	label    string
+	consumer model.CredentialConsumer
+}
+
 func sortByLabel(consumers []model.CredentialConsumer) {
-	sort.SliceStable(consumers, func(a, b int) bool {
-		return consumers[a].Label() < consumers[b].Label()
-	})
+	labelled := make([]labelledConsumer, len(consumers))
+	for i, consumer := range consumers {
+		labelled[i] = labelledConsumer{label: consumer.Label(), consumer: consumer}
+	}
+
+	sort.SliceStable(labelled, func(a, b int) bool { return labelled[a].label < labelled[b].label })
+
+	for i, entry := range labelled {
+		consumers[i] = entry.consumer
+	}
 }
