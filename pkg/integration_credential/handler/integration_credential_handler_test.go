@@ -518,7 +518,10 @@ func TestListAttachesReferencedBy(t *testing.T) {
 	stub := &stubService{}
 	id := uuid.New()
 	stub.listed = []model.IntegrationCredential{{ID: id, Name: "Dify", Provider: "dify", Kind: model.KindStatic, IsActive: true}}
-	references := &stubReferences{index: service.ReferenceIndex{id: {"Agente Dify", "Bot de canal (evo_ai)"}}}
+	references := &stubReferences{index: service.ReferenceIndex{id: {
+		{Kind: model.ConsumerKindAgent, Name: "Dify", Key: "api_key"},
+		{Kind: model.ConsumerKindChannelBot, Name: "evo_ai"},
+	}}}
 	handler := NewIntegrationCredentialHandler(stub, fernetTestKey, nil, nil, references)
 
 	recorder := httptest.NewRecorder()
@@ -531,8 +534,11 @@ func TestListAttachesReferencedBy(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "Agente Dify") || !strings.Contains(body, "Bot de canal") {
+	if !strings.Contains(body, `"referenced_by":["Agente Dify [api_key]","Bot de canal (evo_ai)"]`) {
 		t.Errorf("referenced_by is missing from the payload: %s", body)
+	}
+	if !strings.Contains(body, `"holders":[{"kind":"agent","name":"Dify","key":"api_key"},{"kind":"channel_bot","name":"evo_ai"}]`) {
+		t.Errorf("holders are missing from the payload: %s", body)
 	}
 	// The whole page is aggregated in ONE pass, never per credential.
 	if references.calls != 1 {
@@ -556,6 +562,9 @@ func TestListReportsAnEmptyArrayForAnUnusedCredential(t *testing.T) {
 
 	if !strings.Contains(recorder.Body.String(), `"referenced_by":[]`) {
 		t.Errorf(`expected "referenced_by":[] in the payload: %s`, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"holders":[]`) {
+		t.Errorf(`expected "holders":[] in the payload: %s`, recorder.Body.String())
 	}
 }
 

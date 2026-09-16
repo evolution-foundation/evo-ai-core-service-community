@@ -27,13 +27,15 @@ type IntegrationCredentialService interface {
 // listing builds: the guard asks about a single row and must hear a read
 // failure, never an empty list.
 type ReferenceLookup interface {
-	ConsumersOf(ctx context.Context, id uuid.UUID) ([]string, error)
+	ConsumersOf(ctx context.Context, id uuid.UUID) ([]model.CredentialConsumer, error)
 }
 
-// DeleteConflictDetails is the 409 payload. The labels are display strings for
-// the screen, which is why they travel here and not inside the message.
+// DeleteConflictDetails is the 409 payload. It travels here and not inside the
+// message because the screen renders it: `holders` for the client to label in
+// its language, `consumers` as the pt-BR strings older clients display.
 type DeleteConflictDetails struct {
-	Consumers []string `json:"consumers"`
+	Consumers []string                   `json:"consumers"`
+	Holders   []model.CredentialConsumer `json:"holders"`
 }
 
 type integrationCredentialService struct {
@@ -196,19 +198,19 @@ func (s *integrationCredentialService) refuseIfConnected(ctx context.Context, cr
 			continue
 		}
 
-		return conflict([]string{fmt.Sprintf("Integração %s", connection.Provider)})
+		return conflict([]model.CredentialConsumer{{Kind: model.ConsumerKindIntegration, Name: connection.Provider}})
 	}
 
 	return nil
 }
 
-// conflict carries the consumers in details, not in the message: they are
-// pt-BR display strings, and joining them into an English sentence gave a
-// client no way to split a list whose items may contain a comma.
-func conflict(consumers []string) error {
+// conflict carries the consumers in details, not in the message: joining them
+// into an English sentence gave a client no way to split a list whose items may
+// contain a comma.
+func conflict(consumers []model.CredentialConsumer) error {
 	return apiErrors.New(
 		apiErrors.Conflict,
 		fmt.Sprintf("integration credential is still in use by %d consumer(s)", len(consumers)),
 		http.StatusConflict,
-	).WithDetails(DeleteConflictDetails{Consumers: consumers})
+	).WithDetails(DeleteConflictDetails{Consumers: Labels(consumers), Holders: consumers})
 }

@@ -89,7 +89,8 @@ func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []
 	}
 
 	for i := range items {
-		items[i].ReferencedBy = index.For(items[i].ID)
+		items[i].ReferencedBy = index.LabelsFor(items[i].ID)
+		items[i].Holders = index.For(items[i].ID)
 	}
 
 	return items

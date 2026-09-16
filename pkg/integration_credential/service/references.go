@@ -20,16 +20,30 @@ type ReferenceReader interface {
 }
 
 // ReferenceIndex answers "who uses this credential" for the whole page.
-type ReferenceIndex map[uuid.UUID][]string
+type ReferenceIndex map[uuid.UUID][]model.CredentialConsumer
 
-// For returns the labels of a credential, always a slice and never nil: the
+// For returns the consumers of a credential, always a slice and never nil: the
 // screen distinguishes "no consumers" from "the server does not know", and a
 // nil would serialize as `null` instead of `[]`.
-func (i ReferenceIndex) For(id uuid.UUID) []string {
-	if labels, ok := i[id]; ok {
-		return labels
+func (i ReferenceIndex) For(id uuid.UUID) []model.CredentialConsumer {
+	if consumers, ok := i[id]; ok {
+		return consumers
 	}
-	return []string{}
+	return []model.CredentialConsumer{}
+}
+
+// LabelsFor returns the consumers of a credential as pt-BR display strings.
+func (i ReferenceIndex) LabelsFor(id uuid.UUID) []string {
+	return Labels(i.For(id))
+}
+
+// Labels renders consumers as pt-BR display strings.
+func Labels(consumers []model.CredentialConsumer) []string {
+	labels := make([]string, 0, len(consumers))
+	for _, consumer := range consumers {
+		labels = append(labels, consumer.Label())
+	}
+	return labels
 }
 
 type referenceIndexBuilder struct {
@@ -52,13 +66,13 @@ func (b *referenceIndexBuilder) Build(ctx context.Context) (ReferenceIndex, erro
 	}
 
 	for _, row := range rows {
-		index[row.CredentialID] = append(index[row.CredentialID], row.Label)
+		index[row.CredentialID] = append(index[row.CredentialID], row.Consumer)
 	}
 
 	// Sorted so the same credential renders its consumers in the same order on
 	// every load.
 	for id := range index {
-		sort.Strings(index[id])
+		sortByLabel(index[id])
 	}
 
 	return index, nil
@@ -67,17 +81,23 @@ func (b *referenceIndexBuilder) Build(ctx context.Context) (ReferenceIndex, erro
 // ConsumersOf names who holds ONE credential, narrowed in the database. It
 // propagates a read failure instead of degrading: the caller is the delete
 // guard, and an empty answer there means "nobody uses it, go ahead".
-func (b *referenceIndexBuilder) ConsumersOf(ctx context.Context, id uuid.UUID) ([]string, error) {
+func (b *referenceIndexBuilder) ConsumersOf(ctx context.Context, id uuid.UUID) ([]model.CredentialConsumer, error) {
 	rows, err := b.reader.ReferencesForCredential(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	labels := make([]string, 0, len(rows))
+	consumers := make([]model.CredentialConsumer, 0, len(rows))
 	for _, row := range rows {
-		labels = append(labels, row.Label)
+		consumers = append(consumers, row.Consumer)
 	}
-	sort.Strings(labels)
+	sortByLabel(consumers)
 
-	return labels, nil
+	return consumers, nil
+}
+
+func sortByLabel(consumers []model.CredentialConsumer) {
+	sort.SliceStable(consumers, func(a, b int) bool {
+		return consumers[a].Label() < consumers[b].Label()
+	})
 }

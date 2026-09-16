@@ -43,21 +43,21 @@ func (r *stubCredentialRepo) Delete(context.Context, uuid.UUID) (bool, error) {
 }
 
 type referencedStub struct {
-	id     uuid.UUID
-	labels []string
-	err    error
-	calls  int
+	id        uuid.UUID
+	consumers []model.CredentialConsumer
+	err       error
+	calls     int
 }
 
-func (r *referencedStub) ConsumersOf(_ context.Context, id uuid.UUID) ([]string, error) {
+func (r *referencedStub) ConsumersOf(_ context.Context, id uuid.UUID) ([]model.CredentialConsumer, error) {
 	r.calls++
 	if r.err != nil {
 		return nil, r.err
 	}
 	if id != r.id {
-		return []string{}, nil
+		return []model.CredentialConsumer{}, nil
 	}
-	return r.labels, nil
+	return r.consumers, nil
 }
 
 type connectionsStub struct {
@@ -160,7 +160,10 @@ func TestDeleteRacingWithAnotherDeleteIsNotFound(t *testing.T) {
 func TestDeleteRefusesWhileACredentialHasConsumers(t *testing.T) {
 	id := uuid.New()
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleted: true}
-	refs := &referencedStub{id: id, labels: []string{"Agente Cobrança [api_key]", "MCP Zendesk [token]"}}
+	refs := &referencedStub{id: id, consumers: []model.CredentialConsumer{
+		{Kind: model.ConsumerKindAgent, Name: "Cobrança", Key: "api_key"},
+		{Kind: model.ConsumerKindMCP, Name: "Zendesk", Key: "token"},
+	}}
 	svc := NewIntegrationCredentialService(repo, refs, &connectionsStub{})
 
 	err := svc.Delete(context.Background(), id)
@@ -169,12 +172,21 @@ func TestDeleteRefusesWhileACredentialHasConsumers(t *testing.T) {
 	}
 
 	details := conflictDetails(t, err)
-	if len(details.Consumers) != len(refs.labels) {
-		t.Fatalf("details name %v, want %v", details.Consumers, refs.labels)
+	if len(details.Holders) != len(refs.consumers) {
+		t.Fatalf("holders = %v, want %v", details.Holders, refs.consumers)
 	}
-	for i, label := range refs.labels {
+	for i, consumer := range refs.consumers {
+		if details.Holders[i] != consumer {
+			t.Errorf("holders[%d] = %v, want %v", i, details.Holders[i], consumer)
+		}
+	}
+	labels := []string{"Agente Cobrança [api_key]", "MCP Zendesk [token]"}
+	if len(details.Consumers) != len(labels) {
+		t.Fatalf("consumers = %v, want %v", details.Consumers, labels)
+	}
+	for i, label := range labels {
 		if details.Consumers[i] != label {
-			t.Errorf("details[%d] = %q, want %q", i, details.Consumers[i], label)
+			t.Errorf("consumers[%d] = %q, want %q", i, details.Consumers[i], label)
 		}
 	}
 	if repo.calls != 0 {
@@ -186,7 +198,7 @@ func TestDeleteProceedsWhenNoConsumersHoldTheCredential(t *testing.T) {
 	id := uuid.New()
 	repo := &stubCredentialRepo{stored: &model.IntegrationCredential{}, deleted: true}
 	// Another credential has consumers; the one being deleted does not.
-	refs := &referencedStub{id: uuid.New(), labels: []string{"Agente Cobrança [api_key]"}}
+	refs := &referencedStub{id: uuid.New(), consumers: []model.CredentialConsumer{{Kind: model.ConsumerKindAgent, Name: "Cobrança", Key: "api_key"}}}
 	svc := NewIntegrationCredentialService(repo, refs, &connectionsStub{})
 
 	if err := svc.Delete(context.Background(), id); err != nil {
@@ -220,8 +232,12 @@ func TestDeleteRefusesAnOAuthCredentialWhoseConnectionIsLive(t *testing.T) {
 	svc := NewIntegrationCredentialService(repo, refs, connections)
 
 	details := conflictDetails(t, svc.Delete(context.Background(), id))
-	if len(details.Consumers) != 1 {
-		t.Fatalf("expected the connection named once, got %v", details.Consumers)
+	want := model.CredentialConsumer{Kind: model.ConsumerKindIntegration, Name: "github"}
+	if len(details.Holders) != 1 || details.Holders[0] != want {
+		t.Fatalf("holders = %v, want [%v]", details.Holders, want)
+	}
+	if len(details.Consumers) != 1 || details.Consumers[0] != "Integração github" {
+		t.Fatalf("consumers = %v, want [Integração github]", details.Consumers)
 	}
 	if repo.calls != 0 {
 		t.Fatalf("must not delete a row the listing sync would recreate, got %d calls", repo.calls)
