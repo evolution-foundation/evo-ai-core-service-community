@@ -3,6 +3,9 @@ package middleware
 import (
 	"net/http"
 
+	apiErrors "evo-ai-core-service/internal/httpclient/errors"
+	"evo-ai-core-service/internal/httpclient/response"
+	"evo-ai-core-service/internal/infra/postgres"
 	agentService "evo-ai-core-service/pkg/agent/service"
 
 	"github.com/gin-gonic/gin"
@@ -47,13 +50,19 @@ func (a *agentAccessMiddleware) GetAgentAccessMiddleware() gin.HandlerFunc {
 		}
 
 		if errAgentID != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID"})
+			response.ErrorResponse(c, apiErrors.BadRequest, "Invalid agent ID", nil, http.StatusBadRequest)
+			c.Abort()
 			return
 		}
 
 		_, err := a.agentService.GetByID(ctx, agentID)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID"})
+			if postgres.IsRecordNotFound(err) {
+				response.ErrorResponse(c, apiErrors.AgentNotFound, "Agent not found", nil, http.StatusNotFound)
+			} else {
+				response.ErrorResponse(c, apiErrors.InternalError, "Failed to get agent", nil, http.StatusInternalServerError)
+			}
+			c.Abort()
 			return
 		}
 
