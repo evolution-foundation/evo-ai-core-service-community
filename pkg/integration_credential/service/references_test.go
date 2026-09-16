@@ -44,9 +44,9 @@ func TestReferencesGroupsEveryConsumerUnderItsCredential(t *testing.T) {
 	second := uuid.New()
 
 	reader := &stubReferenceReader{rows: []model.CredentialReference{
-		{CredentialID: first, Label: "Agente Dify"},
-		{CredentialID: first, Label: "Tool Busca [Authorization]"},
-		{CredentialID: second, Label: "Bot do WhatsApp"},
+		{CredentialID: first, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindAgent, Name: "Dify", Key: "api_key"}},
+		{CredentialID: first, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindTool, Name: "Busca", Key: "Authorization"}},
+		{CredentialID: second, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindChannelBot, Name: "whatsapp"}},
 	}}
 
 	index, err := NewReferenceIndex(reader).Build(context.Background())
@@ -66,9 +66,9 @@ func TestReferencesGroupsEveryConsumerUnderItsCredential(t *testing.T) {
 // 5N round trips. The stores are read ONCE and joined in memory.
 func TestReferencesReadsTheStoresOncePerRequest(t *testing.T) {
 	reader := &stubReferenceReader{rows: []model.CredentialReference{
-		{CredentialID: uuid.New(), Label: "um"},
-		{CredentialID: uuid.New(), Label: "dois"},
-		{CredentialID: uuid.New(), Label: "tres"},
+		{CredentialID: uuid.New(), Consumer: model.CredentialConsumer{Kind: model.ConsumerKindIntegration, Name: "um"}},
+		{CredentialID: uuid.New(), Consumer: model.CredentialConsumer{Kind: model.ConsumerKindIntegration, Name: "dois"}},
+		{CredentialID: uuid.New(), Consumer: model.CredentialConsumer{Kind: model.ConsumerKindIntegration, Name: "tres"}},
 	}}
 
 	if _, err := NewReferenceIndex(reader).Build(context.Background()); err != nil {
@@ -88,10 +88,14 @@ func TestReferencesAreEmptyRatherThanAbsentForAnUnusedCredential(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if labels := index.For(uuid.New()); labels == nil {
-		t.Error("an unused credential returned nil instead of an empty slice")
-	} else if len(labels) != 0 {
-		t.Errorf("an unused credential reported %d references", len(labels))
+	id := uuid.New()
+	if consumers := index.For(id); consumers == nil {
+		t.Error("an unused credential returned nil consumers instead of an empty slice")
+	} else if len(consumers) != 0 {
+		t.Errorf("an unused credential reported %d consumers", len(consumers))
+	}
+	if labels := index.LabelsFor(id); labels == nil {
+		t.Error("an unused credential returned nil labels instead of an empty slice")
 	}
 }
 
@@ -114,15 +118,19 @@ func TestReferencesDegradeToEmptyOnReadFailure(t *testing.T) {
 func TestReferenceLabelsAreStableForRendering(t *testing.T) {
 	id := uuid.New()
 	reader := &stubReferenceReader{rows: []model.CredentialReference{
-		{CredentialID: id, Label: "zeta"},
-		{CredentialID: id, Label: "alfa"},
+		{CredentialID: id, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindTool, Name: "zeta", Key: "k"}},
+		{CredentialID: id, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindAgent, Name: "alfa", Key: "k"}},
 	}}
 
 	index, _ := NewReferenceIndex(reader).Build(context.Background())
 
-	labels := index.For(id)
-	if len(labels) != 2 || labels[0] != "alfa" || labels[1] != "zeta" {
+	labels := index.LabelsFor(id)
+	if len(labels) != 2 || labels[0] != "Agente alfa [k]" || labels[1] != "Ferramenta zeta [k]" {
 		t.Errorf("labels are not sorted for stable rendering: %v", labels)
+	}
+	consumers := index.For(id)
+	if len(consumers) != 2 || consumers[0].Name != "alfa" || consumers[1].Name != "zeta" {
+		t.Errorf("consumers are not in the order of their labels: %v", consumers)
 	}
 }
 
@@ -134,9 +142,9 @@ func TestConsumersOfNarrowsToTheCredentialAsked(t *testing.T) {
 	other := uuid.New()
 
 	reader := &stubReferenceReader{rows: []model.CredentialReference{
-		{CredentialID: wanted, Label: "MCP Zendesk [token]"},
-		{CredentialID: wanted, Label: "Agente Cobrança [api_key]"},
-		{CredentialID: other, Label: "Bot de canal (whatsapp)"},
+		{CredentialID: wanted, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindMCP, Name: "Zendesk", Key: "token"}},
+		{CredentialID: wanted, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindAgent, Name: "Cobrança", Key: "api_key"}},
+		{CredentialID: other, Consumer: model.CredentialConsumer{Kind: model.ConsumerKindChannelBot, Name: "whatsapp"}},
 	}}
 
 	consumers, err := NewReferenceIndex(reader).ConsumersOf(context.Background(), wanted)
@@ -144,13 +152,16 @@ func TestConsumersOfNarrowsToTheCredentialAsked(t *testing.T) {
 		t.Fatalf("ConsumersOf: %v", err)
 	}
 
-	want := []string{"Agente Cobrança [api_key]", "MCP Zendesk [token]"}
+	want := []model.CredentialConsumer{
+		{Kind: model.ConsumerKindAgent, Name: "Cobrança", Key: "api_key"},
+		{Kind: model.ConsumerKindMCP, Name: "Zendesk", Key: "token"},
+	}
 	if len(consumers) != len(want) {
 		t.Fatalf("consumers = %v, want %v", consumers, want)
 	}
 	for i := range want {
 		if consumers[i] != want[i] {
-			t.Errorf("consumers[%d] = %q, want %q", i, consumers[i], want[i])
+			t.Errorf("consumers[%d] = %v, want %v", i, consumers[i], want[i])
 		}
 	}
 }
@@ -161,5 +172,24 @@ func TestConsumersOfPropagatesAReadFailure(t *testing.T) {
 
 	if _, err := NewReferenceIndex(reader).ConsumersOf(context.Background(), uuid.New()); err == nil {
 		t.Fatal("expected the read failure to propagate, got nil")
+	}
+}
+
+func TestLabelsKeepTheStringsOlderClientsDisplay(t *testing.T) {
+	cases := []struct {
+		consumer model.CredentialConsumer
+		want     string
+	}{
+		{model.CredentialConsumer{Kind: model.ConsumerKindIntegration, Name: "github"}, "Integração github"},
+		{model.CredentialConsumer{Kind: model.ConsumerKindTool, Name: "Busca", Key: "Authorization"}, "Ferramenta Busca [Authorization]"},
+		{model.CredentialConsumer{Kind: model.ConsumerKindMCP, Name: "Zendesk", Key: "token"}, "MCP Zendesk [token]"},
+		{model.CredentialConsumer{Kind: model.ConsumerKindAgent, Name: "Cobrança", Key: "api_key"}, "Agente Cobrança [api_key]"},
+		{model.CredentialConsumer{Kind: model.ConsumerKindChannelBot, Name: "whatsapp"}, "Bot de canal (whatsapp)"},
+	}
+
+	for _, tc := range cases {
+		if got := tc.consumer.Label(); got != tc.want {
+			t.Errorf("%s label = %q, want %q", tc.consumer.Kind, got, tc.want)
+		}
 	}
 }

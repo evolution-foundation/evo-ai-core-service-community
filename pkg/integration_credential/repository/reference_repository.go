@@ -84,19 +84,22 @@ type referenceQuery struct {
 // a single definition per store: every query already yields credential_id as
 // text, so the predicate applies uniformly.
 func filterByCredential(sql string) string {
-	return fmt.Sprintf(`SELECT refs.credential_id, refs.label FROM (%s) AS refs WHERE refs.credential_id = ?`, sql)
+	return fmt.Sprintf(`SELECT refs.credential_id, refs.consumer_kind, refs.consumer_name, refs.consumer_key FROM (%s) AS refs WHERE refs.credential_id = ?`, sql)
 }
 
-// Each query yields (credential_id, label). The label is a display string, and
-// for the CRM-owned store it is deliberately NOT the bot name: `agent_bots` has
-// no tenant column, so echoing names could disclose across tenants.
+// Each query yields (credential_id, consumer_kind, consumer_name, consumer_key).
+// For the CRM-owned store the name is deliberately NOT the bot name:
+// `agent_bots` has no tenant column, so echoing names could disclose across
+// tenants.
 func (r *referenceRepository) queries() []referenceQuery {
 	return []referenceQuery{
 		{
 			table:   "evo_core_agent_integrations",
 			columns: []string{"config", "provider"},
 			sql: `SELECT (config ->> 'credential_id') AS credential_id,
-				CONCAT('Integração ', provider) AS label
+				'integration' AS consumer_kind,
+				COALESCE(provider, '') AS consumer_name,
+				'' AS consumer_key
 				FROM evo_core_agent_integrations
 				WHERE config ->> 'credential_id' IS NOT NULL`,
 		},
@@ -104,7 +107,9 @@ func (r *referenceRepository) queries() []referenceQuery {
 			table:   "evo_core_custom_tools",
 			columns: []string{"credential_refs", "name"},
 			sql: `SELECT refs.value AS credential_id,
-				CONCAT('Ferramenta ', t.name, ' [', refs.key, ']') AS label
+				'tool' AS consumer_kind,
+				COALESCE(t.name, '') AS consumer_name,
+				refs.key AS consumer_key
 				FROM evo_core_custom_tools t,
 				LATERAL jsonb_each_text(t.credential_refs) AS refs(key, value)
 				WHERE t.credential_refs <> '{}'::jsonb`,
@@ -113,7 +118,9 @@ func (r *referenceRepository) queries() []referenceQuery {
 			table:   "evo_core_custom_mcp_servers",
 			columns: []string{"credential_refs", "name"},
 			sql: `SELECT refs.value AS credential_id,
-				CONCAT('MCP ', m.name, ' [', refs.key, ']') AS label
+				'mcp' AS consumer_kind,
+				COALESCE(m.name, '') AS consumer_name,
+				refs.key AS consumer_key
 				FROM evo_core_custom_mcp_servers m,
 				LATERAL jsonb_each_text(m.credential_refs) AS refs(key, value)
 				WHERE m.credential_refs <> '{}'::jsonb`,
@@ -126,7 +133,9 @@ func (r *referenceRepository) queries() []referenceQuery {
 			table:   "evo_core_agents",
 			columns: []string{"config", "name"},
 			sql: `SELECT refs.value AS credential_id,
-				CONCAT('Agente ', a.name, ' [', refs.key, ']') AS label
+				'agent' AS consumer_kind,
+				COALESCE(a.name, '') AS consumer_name,
+				refs.key AS consumer_key
 				FROM evo_core_agents a,
 				LATERAL jsonb_each_text((a.config -> 'credential_refs')::jsonb) AS refs(key, value)
 				WHERE a.config -> 'credential_refs' IS NOT NULL`,
@@ -135,7 +144,9 @@ func (r *referenceRepository) queries() []referenceQuery {
 			table:   "agent_bots",
 			columns: []string{"credential_id", "bot_provider"},
 			sql: `SELECT credential_id::text AS credential_id,
-				CONCAT('Bot de canal (', bot_provider, ')') AS label
+				'channel_bot' AS consumer_kind,
+				COALESCE(bot_provider, '') AS consumer_name,
+				'' AS consumer_key
 				FROM agent_bots
 				WHERE credential_id IS NOT NULL`,
 		},
@@ -163,7 +174,9 @@ func (r *referenceRepository) deployed(query referenceQuery) bool {
 func (r *referenceRepository) scan(ctx context.Context, sql string, args ...interface{}) ([]model.CredentialReference, error) {
 	var rows []struct {
 		CredentialID string
-		Label        string
+		ConsumerKind string
+		ConsumerName string
+		ConsumerKey  string
 	}
 
 	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
@@ -176,7 +189,10 @@ func (r *referenceRepository) scan(ctx context.Context, sql string, args ...inte
 		if err != nil {
 			continue
 		}
-		references = append(references, model.CredentialReference{CredentialID: id, Label: row.Label})
+		references = append(references, model.CredentialReference{
+			CredentialID: id,
+			Consumer:     model.CredentialConsumer{Kind: row.ConsumerKind, Name: row.ConsumerName, Key: row.ConsumerKey},
+		})
 	}
 
 	return references, nil

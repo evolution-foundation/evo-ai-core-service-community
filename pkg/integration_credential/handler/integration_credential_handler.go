@@ -74,9 +74,9 @@ func NewIntegrationCredentialHandler(
 	}
 }
 
-// attachReferences fills `referenced_by` on every row of a page. Aggregation
-// failure does not fail the request: the field stays absent and the screen
-// falls back to not showing consumers.
+// attachReferences fills `referenced_by` and `holders` on every row of a page.
+// Aggregation failure does not fail the request: both fields stay absent and
+// the screen falls back to not showing consumers.
 func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []model.IntegrationCredentialResponse) []model.IntegrationCredentialResponse {
 	if h.references == nil || len(items) == 0 {
 		return items
@@ -89,7 +89,8 @@ func (h *integrationCredentialHandler) attachReferences(c *gin.Context, items []
 	}
 
 	for i := range items {
-		items[i].ReferencedBy = index.For(items[i].ID)
+		items[i].ReferencedBy = index.LabelsFor(items[i].ID)
+		items[i].Holders = index.For(items[i].ID)
 	}
 
 	return items
