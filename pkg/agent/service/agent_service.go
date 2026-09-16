@@ -291,7 +291,7 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 
 	agent, err := s.agentRepository.Update(ctx, request, id)
 	if err != nil {
-		return nil, errors.New("Failed to update agent")
+		return nil, errorsPostgres.MapDBError(err, model.AgentErrors)
 	}
 
 	// Update Evolution bot synchronously to ensure it works with the current context

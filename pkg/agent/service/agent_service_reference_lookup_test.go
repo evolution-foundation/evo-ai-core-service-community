@@ -234,7 +234,8 @@ func TestUpdate_AgentLookupOutageStaysAServerError(t *testing.T) {
 // Fails the read the way the GORM repository does; cardURLFakeRepo's miss is a plain error.
 type agentLookupRepo struct {
 	cardURLFakeRepo
-	getErr error
+	getErr    error
+	updateErr error
 }
 
 func (f *agentLookupRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Agent, error) {
@@ -242,6 +243,32 @@ func (f *agentLookupRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Age
 		return nil, f.getErr
 	}
 	return f.cardURLFakeRepo.GetByID(ctx, id)
+}
+
+func (f *agentLookupRepo) Update(ctx context.Context, agent *model.Agent, id uuid.UUID) (*model.Agent, error) {
+	if f.updateErr != nil {
+		f.updateCalled = true
+		return nil, f.updateErr
+	}
+	return f.cardURLFakeRepo.Update(ctx, agent, id)
+}
+
+// The write is mapped like the one in AssignFolder, so a name the tenant already
+// uses answers 409 instead of the blanket 500 the generic wrapper produced.
+func TestUpdate_DuplicateNameIsAConflictWithoutTheDriverText(t *testing.T) {
+	repo := &agentLookupRepo{updateErr: &pgconn.PgError{Code: "23505", Message: lookupDriverText}}
+	svc := serviceForReferenceLookups(&repo.cardURLFakeRepo, nil, nil)
+	svc.agentRepository = repo
+	existing := storedLLMAgent()
+	repo.stored = existing
+
+	edit := llmAgent()
+	_, err := svc.Update(context.Background(), &edit, existing.ID)
+
+	assertClientError(t, err, http.StatusConflict, string(errorsPostgres.ERR_DUPLICATE_KEY_VIOLATION), "already exists")
+	if _, message, _ := apierrors.HandleError(err); strings.Contains(message, "db.internal") {
+		t.Errorf("the driver error was echoed back: %q", message)
+	}
 }
 
 func TestAssignFolder_MissingFolderIs400NamingTheFieldAndTheRowIsIntact(t *testing.T) {
