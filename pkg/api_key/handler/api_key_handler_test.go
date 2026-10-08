@@ -170,6 +170,7 @@ func TestListNeverReturnsAnyKey(t *testing.T) {
 	svc := &stubService{listed: []model.ApiKey{
 		{Name: "Producao", Provider: "openai", Key: encrypted, KeyHint: "4f2a", IsActive: true},
 		{Name: "Testes", Provider: "anthropic", Key: encrypted, KeyHint: "91bc", IsActive: false},
+		{Name: "OpenRouter", Provider: "openrouter", Key: encrypted, KeyHint: "aa11", IsActive: true},
 	}}
 
 	rec := call(t, http.MethodGet, "/agents/apikeys", "",
@@ -190,6 +191,9 @@ func TestListNeverReturnsAnyKey(t *testing.T) {
 	if !strings.Contains(body, `"openai_compatible":true`) ||
 		!strings.Contains(body, `"openai_compatible":false`) {
 		t.Errorf("list is missing openai_compatible per provider: %s", body)
+	}
+	if !strings.Contains(body, `"inbox_assist_compatible":true`) {
+		t.Errorf("list is missing inbox_assist_compatible for OpenRouter: %s", body)
 	}
 }
 
