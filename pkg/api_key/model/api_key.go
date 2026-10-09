@@ -91,12 +91,13 @@ type ApiKeyResponse struct {
 	Scope    string    `json:"scope"`
 	// Not a secret: the endpoint is what the screen renders back so the user
 	// sees where the credential points.
-	BaseURL          *string   `json:"base_url,omitempty"`
-	ImportedFrom     *string   `json:"imported_from,omitempty"`
-	OpenAICompatible bool      `json:"openai_compatible"`
-	IsActive         bool      `json:"is_active"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	BaseURL               *string   `json:"base_url,omitempty"`
+	ImportedFrom          *string   `json:"imported_from,omitempty"`
+	OpenAICompatible      bool      `json:"openai_compatible"`
+	InboxAssistCompatible bool      `json:"inbox_assist_compatible"`
+	IsActive              bool      `json:"is_active"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type ApiKeyListResponse struct {
@@ -149,6 +150,13 @@ func IsOpenAICompatible(provider string) bool {
 	return openAICompatibleProviders[provider]
 }
 
+// IsInboxAssistCompatible reports whether a provider supports this consumer's
+// OpenAI-style chat-completions request. OpenRouter supports chat completions,
+// but not every other endpoint used by the CRM's AI features.
+func IsInboxAssistCompatible(provider string) bool {
+	return IsOpenAICompatible(provider) || provider == "openrouter"
+}
+
 // DeriveKeyHint returns the last characters of a plaintext key, used to render
 // a mask in the UI without ever sending the key back to the browser.
 func DeriveKeyHint(plainKey string) string {
@@ -172,16 +180,17 @@ func NormalizeBaseURL(value string) *string {
 
 func (u *ApiKey) ToResponse() *ApiKeyResponse {
 	return &ApiKeyResponse{
-		ID:               u.ID,
-		Name:             u.Name,
-		Provider:         u.Provider,
-		KeyHint:          u.KeyHint,
-		Scope:            u.Scope,
-		BaseURL:          u.BaseURL,
-		ImportedFrom:     u.ImportedFrom,
-		OpenAICompatible: IsOpenAICompatible(u.Provider),
-		IsActive:         u.IsActive,
-		CreatedAt:        u.CreatedAt,
-		UpdatedAt:        u.UpdatedAt,
+		ID:                    u.ID,
+		Name:                  u.Name,
+		Provider:              u.Provider,
+		KeyHint:               u.KeyHint,
+		Scope:                 u.Scope,
+		BaseURL:               u.BaseURL,
+		ImportedFrom:          u.ImportedFrom,
+		OpenAICompatible:      IsOpenAICompatible(u.Provider),
+		InboxAssistCompatible: IsInboxAssistCompatible(u.Provider),
+		IsActive:              u.IsActive,
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
 	}
 }
