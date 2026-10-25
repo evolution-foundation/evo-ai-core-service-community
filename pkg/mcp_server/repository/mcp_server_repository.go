@@ -12,8 +12,8 @@ import (
 type McpServerRepository interface {
 	Create(ctx context.Context, mcpServer model.McpServer) (*model.McpServer, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.McpServer, error)
-	List(ctx context.Context, page int, pageSize int) ([]*model.McpServer, error)
-	Count(ctx context.Context) (int64, error)
+	List(ctx context.Context, page int, pageSize int, search string) ([]*model.McpServer, error)
+	Count(ctx context.Context, search string) (int64, error)
 	Update(ctx context.Context, mcpServer *model.McpServer, id uuid.UUID) (*model.McpServer, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
@@ -44,24 +44,36 @@ func (r *mcpServerRepository) GetByID(ctx context.Context, id uuid.UUID) (*model
 	return &mcpServer, nil
 }
 
-func (r *mcpServerRepository) List(ctx context.Context, page int, pageSize int) ([]*model.McpServer, error) {
+func (r *mcpServerRepository) List(ctx context.Context, page int, pageSize int, search string) ([]*model.McpServer, error) {
 	var mcpServer []*model.McpServer
 
-	if err := r.db.WithContext(ctx).Offset((page - 1) * pageSize).Limit(pageSize).Find(&mcpServer).Error; err != nil {
+	query := applyMcpServerSearch(r.db.WithContext(ctx), search)
+
+	if err := query.Offset((page - 1) * pageSize).Limit(pageSize).Find(&mcpServer).Error; err != nil {
 		return []*model.McpServer{}, err
 	}
 
 	return mcpServer, nil
 }
 
-func (r *mcpServerRepository) Count(ctx context.Context) (int64, error) {
+func (r *mcpServerRepository) Count(ctx context.Context, search string) (int64, error) {
 	var count int64
 
-	if err := r.db.WithContext(ctx).Model(&model.McpServer{}).Count(&count).Error; err != nil {
+	query := applyMcpServerSearch(r.db.WithContext(ctx).Model(&model.McpServer{}), search)
+
+	if err := query.Count(&count).Error; err != nil {
 		return 0, err
 	}
 
 	return count, nil
+}
+
+// List and Count share the clause so the total counts only the rows the search keeps.
+func applyMcpServerSearch(query *gorm.DB, search string) *gorm.DB {
+	if search == "" {
+		return query
+	}
+	return query.Where("name ILIKE ?", "%"+search+"%")
 }
 
 func (r *mcpServerRepository) Update(ctx context.Context, mcpServer *model.McpServer, id uuid.UUID) (*model.McpServer, error) {

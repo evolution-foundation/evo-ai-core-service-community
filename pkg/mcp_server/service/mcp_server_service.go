@@ -13,7 +13,7 @@ import (
 type McpServerService interface {
 	Create(ctx context.Context, request model.McpServer) (*model.McpServer, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.McpServer, error)
-	List(ctx context.Context, page int, pageSize int) (*model.McpServerListResponse, error)
+	List(ctx context.Context, page int, pageSize int, search string) (*model.McpServerListResponse, error)
 	Update(ctx context.Context, request *model.McpServer, id uuid.UUID) (*model.McpServer, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 }
@@ -48,15 +48,15 @@ func (s *mcpServerService) GetByID(ctx context.Context, id uuid.UUID) (*model.Mc
 	return mcpServer, nil
 }
 
-func (s *mcpServerService) List(ctx context.Context, page int, pageSize int) (*model.McpServerListResponse, error) {
+func (s *mcpServerService) List(ctx context.Context, page int, pageSize int, search string) (*model.McpServerListResponse, error) {
 	// Get paginated items
-	mcpServers, err := s.mcpServerRepository.List(ctx, page, pageSize)
+	mcpServers, err := s.mcpServerRepository.List(ctx, page, pageSize, search)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.MCPServerErrors)
 	}
 
 	// Get total count
-	totalItems, err := s.mcpServerRepository.Count(ctx)
+	totalItems, err := s.mcpServerRepository.Count(ctx, search)
 	if err != nil {
 		return nil, errorsPostgres.MapDBError(err, model.MCPServerErrors)
 	}

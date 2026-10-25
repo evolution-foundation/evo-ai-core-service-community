@@ -9,6 +9,7 @@ import (
 	"evo-ai-core-service/pkg/mcp_server/service"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -159,7 +160,9 @@ func (h *mcpServerHandler) List(c *gin.Context) {
 		pageSize = limitVal
 	}
 
-	listMcpServers, err := h.mcpServersService.List(c.Request.Context(), page, pageSize)
+	search := strings.TrimSpace(c.Query("search"))
+
+	listMcpServers, err := h.mcpServersService.List(c.Request.Context(), page, pageSize, search)
 
 	if err != nil {
 		code, message, httpCode := errors.HandleError(err)
