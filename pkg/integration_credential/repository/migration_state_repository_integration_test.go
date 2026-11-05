@@ -1,8 +1,9 @@
 //go:build integration
 
-// Integration test that runs the tool and MCP pending-secret counts against
-// tables built by the service's own migrations, so a filter on a column the
-// migrations dropped fails here instead of in the migration-state endpoint.
+// Integration test that runs the tool and MCP pending-secret counts, and the
+// migration state built on them, against a schema built by every migration of
+// the service, so a filter on a column a migration dropped fails here instead
+// of in the migration-state endpoint.
 //
 // Run with:
 //
@@ -15,10 +16,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"evo-ai-core-service/pkg/integration_credential/model"
 	"evo-ai-core-service/pkg/integration_credential/repository"
+	"evo-ai-core-service/pkg/integration_credential/service"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -27,15 +30,7 @@ import (
 
 const migrationStateTestSchema = "migration_state_it"
 
-// Every migration that shapes the two tables, in the order they apply.
-var toolAndMcpMigrations = []string{
-	"000002_create_custom_tools_table.up.sql",
-	"000003_create_custom_mcp_servers.up.sql",
-	"000012_remove_is_active_to_custom_tables.up.sql",
-	"000021_add_credential_refs_to_tools_and_mcps.up.sql",
-}
-
-func openMigratedToolStores(t *testing.T) *gorm.DB {
+func openMigratedSchema(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv(envReferenceDatabaseURL)
 	if dsn == "" {
@@ -82,13 +77,18 @@ func openMigratedToolStores(t *testing.T) *gorm.DB {
 		}
 	})
 
-	for _, name := range toolAndMcpMigrations {
-		sql, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", name))
+	migrations, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "*.up.sql"))
+	if err != nil || len(migrations) == 0 {
+		t.Fatalf("no migrations found (%v)", err)
+	}
+	sort.Strings(migrations)
+	for _, path := range migrations {
+		sql, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read migration: %v", err)
 		}
 		if err := db.Exec(string(sql)).Error; err != nil {
-			t.Fatalf("apply %s: %v", name, err)
+			t.Fatalf("apply %s: %v", filepath.Base(path), err)
 		}
 	}
 
@@ -110,7 +110,21 @@ func openMigratedToolStores(t *testing.T) *gorm.DB {
 }
 
 func TestPendingInlineSecretsCountsToolsAndMcpsOnTheMigratedSchema(t *testing.T) {
-	db := openMigratedToolStores(t)
+	db := openMigratedSchema(t)
+	repo := repository.NewMigrationStateRepository(db)
+	state := service.NewMigrationState(repo)
+
+	// Empty stores are retired, which a failed read can never answer.
+	retired, err := state.Retired(context.Background())
+	if err != nil {
+		t.Fatalf("Retired on empty stores: %v", err)
+	}
+	for _, consumer := range []string{model.ConsumerCustomTools, model.ConsumerCustomMcpServers} {
+		if !retired[consumer] {
+			t.Errorf("%s: not retired with nothing inline", consumer)
+		}
+	}
+
 	exec := func(sql string, args ...interface{}) {
 		t.Helper()
 		if err := db.Exec(sql, args...).Error; err != nil {
@@ -141,7 +155,6 @@ func TestPendingInlineSecretsCountsToolsAndMcpsOnTheMigratedSchema(t *testing.T)
 	mcp("replaced by a reference", `{"Authorization": "Bearer abc"}`, ref)
 	mcp("not an auth header", `{"Accept": "text/event-stream"}`, `{}`)
 
-	repo := repository.NewMigrationStateRepository(db)
 	for consumer, want := range map[string]int64{
 		model.ConsumerCustomTools:      2,
 		model.ConsumerCustomMcpServers: 1,
@@ -152,6 +165,16 @@ func TestPendingInlineSecretsCountsToolsAndMcpsOnTheMigratedSchema(t *testing.T)
 		}
 		if got != want {
 			t.Errorf("%s: %d inline secrets pending, want %d", consumer, got, want)
+		}
+	}
+
+	retired, err = state.Retired(context.Background())
+	if err != nil {
+		t.Fatalf("Retired with inline secrets: %v", err)
+	}
+	for _, consumer := range []string{model.ConsumerCustomTools, model.ConsumerCustomMcpServers} {
+		if retired[consumer] {
+			t.Errorf("%s: retired while secrets are still inline", consumer)
 		}
 	}
 }
