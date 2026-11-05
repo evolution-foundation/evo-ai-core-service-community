@@ -56,7 +56,6 @@ func (r *migrationStateRepository) pendingHeaders(ctx context.Context, table str
 	var count int64
 	err := r.db.WithContext(ctx).
 		Table(table).
-		Where("is_active = ?", true).
 		Where(`EXISTS (
 			SELECT 1 FROM jsonb_each_text(headers::jsonb) AS h(key, value)
 			WHERE lower(h.key) IN ('authorization','x-api-key','api-key','apikey','x-auth-token')
