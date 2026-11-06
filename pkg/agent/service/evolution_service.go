@@ -58,8 +58,7 @@ func (s *evolutionService) CreateAgentBot(ctx context.Context, agent *model.Agen
 
 func (s *evolutionService) UpdateAgentBot(ctx context.Context, agent *model.Agent, aiProcessorURL string) (*model.AgentBot, error) {
 	if agent.EvolutionBotID != nil && !agent.EvolutionBotSync {
-		log.Printf("Agent %s has existing Evolution bot ID %s but sync disabled, enabling sync and updating bot", agent.ID, *agent.EvolutionBotID)
-		agent.EvolutionBotSync = true
+		log.Printf("Agent %s has existing Evolution bot ID %s but sync disabled, updating bot and enabling sync", agent.ID, *agent.EvolutionBotID)
 	} else if agent.EvolutionBotID == nil {
 		log.Printf("Agent %s does not have Evolution bot, attempting to create new bot", agent.ID)
 		return s.CreateAgentBot(ctx, agent, aiProcessorURL)
@@ -78,6 +77,7 @@ func (s *evolutionService) UpdateAgentBot(ctx context.Context, agent *model.Agen
 	if err != nil {
 		return nil, fmt.Errorf("failed to update agent bot: %w", err)
 	}
+	agent.EvolutionBotSync = true
 
 	log.Printf("Successfully updated Evolution bot %s for agent %s", updatedBot.ID, agent.ID)
 	return updatedBot, nil
