@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // stubRepository stands in for the database so the merge semantics can be
@@ -238,5 +240,92 @@ func TestUpsertWithoutReferenceNeverConsultsTheVault(t *testing.T) {
 	}
 	if got := upsertedConfig(t, repo)["apiKey"]; got != "app-dify-inline" {
 		t.Errorf("inline value was not persisted: %v", got)
+	}
+}
+
+var forgedOAuthState = map[string]interface{}{
+	"access_token":   "forged-access",
+	"refresh_token":  "forged-refresh",
+	"token":          "forged-token",
+	"token_uri":      "https://attacker.example/token",
+	"client_id":      "forged-client",
+	"client_secret":  "forged-secret",
+	"pkce_verifiers": map[string]interface{}{"s": "forged"},
+	"oauth_metadata": map[string]interface{}{"token_endpoint": "https://attacker.example/token"},
+	"mcp_url":        "https://attacker.example/mcp",
+	"expires_at":     "2099-01-01T00:00:00",
+}
+
+func TestUpsertKeepsTheStoredOAuthStateOfAnOAuthProvider(t *testing.T) {
+	for _, provider := range []string{"notion", "hubspot", "google_calendar_credentials", "google_sheets_credentials"} {
+		t.Run(provider, func(t *testing.T) {
+			stored := map[string]interface{}{
+				"access_token":   "stored-access",
+				"refresh_token":  "stored-refresh",
+				"token_uri":      "https://oauth2.googleapis.com/token",
+				"oauth_metadata": map[string]interface{}{"token_endpoint": "https://auth.provider.example/token"},
+				"mcp_url":        "https://mcp.provider.example/mcp",
+				"tools":          []interface{}{"search"},
+			}
+			repo := &stubRepository{stored: storedConfig(t, stored)}
+			incoming := map[string]interface{}{"tools": []interface{}{"search", "create"}}
+			for key, value := range forgedOAuthState {
+				incoming[key] = value
+			}
+
+			_, err := newService(repo, &stubCredentialLookup{}).Upsert(context.Background(), uuid.New(), model.AgentIntegrationRequest{
+				Provider: provider,
+				Config:   incoming,
+			})
+			if err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+
+			config := upsertedConfig(t, repo)
+			for key := range forgedOAuthState {
+				got, _ := json.Marshal(config[key])
+				want, _ := json.Marshal(stored[key])
+				if string(got) != string(want) {
+					t.Errorf("%s changed by a client save: got %s, stored %s", key, got, want)
+				}
+			}
+			if tools, _ := json.Marshal(config["tools"]); string(tools) != `["search","create"]` {
+				t.Errorf("editable field was not saved: %s", tools)
+			}
+		})
+	}
+}
+
+func TestUpsertOfANewOAuthRowDropsTheOAuthFields(t *testing.T) {
+	repo := &stubRepository{stored: nil, getErr: gorm.ErrRecordNotFound}
+
+	_, err := newService(repo, &stubCredentialLookup{}).Upsert(context.Background(), uuid.New(), model.AgentIntegrationRequest{
+		Provider: "Notion",
+		Config:   forgedOAuthState,
+	})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	config := upsertedConfig(t, repo)
+	for key := range forgedOAuthState {
+		if _, present := config[key]; present {
+			t.Errorf("%s was written by a client save", key)
+		}
+	}
+}
+
+func TestUpsertOfAnOAuthProviderFailsWhenTheStoredStateIsUnknown(t *testing.T) {
+	repo := &stubRepository{getErr: errors.New("connection reset")}
+
+	_, err := newService(repo, &stubCredentialLookup{}).Upsert(context.Background(), uuid.New(), model.AgentIntegrationRequest{
+		Provider: "notion",
+		Config:   map[string]interface{}{"tools": []interface{}{}},
+	})
+	if err == nil {
+		t.Fatal("upsert went ahead without knowing the stored tokens")
+	}
+	if repo.upserted.Provider != "" {
+		t.Error("config was written")
 	}
 }
