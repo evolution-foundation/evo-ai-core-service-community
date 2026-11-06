@@ -10,13 +10,10 @@ import (
 
 const botSavepoint = "agent_bot_write"
 
-// A bot write is allowed to fail without failing the agent write. On the pool that
-// holds by itself; on a request-bound transaction a failed statement aborts the
-// whole transaction and the agent row goes with it, so the bot write gets a
-// savepoint of its own there.
-//
-// botErr is the bot failure the caller may tolerate. txErr means the bound
-// transaction can no longer be used and the request has to fail.
+// On a request-bound transaction a failed bot statement would abort it and lose
+// the agent row, so the bot write runs inside its own savepoint there.
+// botErr is the bot failure the caller may tolerate; txErr means the bound
+// transaction is unusable and the request has to fail.
 func writeAgentBot(ctx context.Context, write func() (*model.AgentBot, error)) (bot *model.AgentBot, botErr, txErr error) {
 	conn, bound := runtimecontext.ConnFromContext(ctx)
 	if !bound {
