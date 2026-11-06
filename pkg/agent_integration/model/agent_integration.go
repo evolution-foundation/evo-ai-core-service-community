@@ -113,6 +113,67 @@ func MergePreservedSecrets(incoming, stored map[string]interface{}) map[string]i
 	return merged
 }
 
+// oauthManagedProviders hold tokens and OAuth metadata that only the
+// processor's OAuth flow writes, straight to the database.
+var oauthManagedProviders = map[string]struct{}{
+	"asana":                       {},
+	"atlassian":                   {},
+	"canva":                       {},
+	"github":                      {},
+	"hubspot":                     {},
+	"linear":                      {},
+	"monday":                      {},
+	"notion":                      {},
+	"paypal":                      {},
+	"supabase":                    {},
+	"google_calendar_credentials": {},
+	"google_sheets_credentials":   {},
+}
+
+// oauthFieldNames are the fields of an OAuth-managed provider that a save
+// through this API never changes. token_uri and the token endpoint inside
+// oauth_metadata decide where the refresh token and client secret are sent.
+var oauthFieldNames = []string{
+	"access_token",
+	"refresh_token",
+	"token",
+	"token_uri",
+	"scopes",
+	"client_id",
+	"client_secret",
+	"token_endpoint_auth_method",
+	"pkce_verifiers",
+	"code_verifier",
+	"oauth_metadata",
+	"mcp_url",
+	"expires_in",
+	"expires_at",
+}
+
+// IsOAuthManaged reports whether a provider's OAuth fields belong to the OAuth flow.
+func IsOAuthManaged(provider string) bool {
+	_, ok := oauthManagedProviders[strings.ToLower(provider)]
+	return ok
+}
+
+// KeepOAuthFields returns incoming with every OAuth field as stored: the
+// incoming value is dropped, and a field that is not stored stays absent.
+func KeepOAuthFields(incoming, stored map[string]interface{}) map[string]interface{} {
+	merged := make(map[string]interface{}, len(incoming))
+	for key, value := range incoming {
+		merged[key] = value
+	}
+
+	for _, field := range oauthFieldNames {
+		delete(merged, field)
+		if value, exists := stored[field]; exists {
+			merged[field] = value
+		}
+	}
+
+	return merged
+}
+
 // isBlankSecret reports an empty or whitespace-only string. A non-string is
 // never blank: sending a number or an object is deliberate.
 func isBlankSecret(value interface{}) bool {

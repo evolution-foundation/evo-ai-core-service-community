@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // credentialKindOAuth mirrors the kind discriminator of the vault table
@@ -65,6 +66,11 @@ func (s *agentIntegrationService) Upsert(ctx context.Context, agentID uuid.UUID,
 		return nil, err
 	}
 
+	config, err = s.keepOAuthState(ctx, agentID, request.Provider, config)
+	if err != nil {
+		return nil, err
+	}
+
 	// Convert map to datatypes.JSON
 	configBytes, err := json.Marshal(config)
 	if err != nil {
@@ -112,6 +118,29 @@ func (s *agentIntegrationService) validateCredentialReference(ctx context.Contex
 	}
 
 	return nil
+}
+
+// keepOAuthState leaves the OAuth fields of an OAuth-managed provider as
+// stored. Unlike mergeWithStoredSecrets, a failed lookup fails the save: an
+// unknown stored state would let the upsert erase the tokens.
+func (s *agentIntegrationService) keepOAuthState(ctx context.Context, agentID uuid.UUID, provider string, config map[string]interface{}) (map[string]interface{}, error) {
+	if !model.IsOAuthManaged(provider) {
+		return config, nil
+	}
+
+	stored, err := s.repository.GetByAgentAndProvider(ctx, agentID, provider)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	var storedConfig map[string]interface{}
+	if err == nil && stored != nil && len(stored.Config) > 0 {
+		if err := json.Unmarshal(stored.Config, &storedConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	return model.KeepOAuthFields(config, storedConfig), nil
 }
 
 // mergeWithStoredSecrets keeps a secret the caller never sent: the upsert
