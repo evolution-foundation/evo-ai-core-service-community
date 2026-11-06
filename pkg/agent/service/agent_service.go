@@ -120,7 +120,12 @@ func (s *agentService) Create(ctx context.Context, request model.Agent) (*model.
 	}
 
 	// Create Evolution bot synchronously to ensure it works with the current context
-	evolutionBot, err := s.evolutionService.CreateAgentBot(ctx, agent, s.aiProcessorURL)
+	evolutionBot, err, txErr := writeAgentBot(ctx, func() (*model.AgentBot, error) {
+		return s.evolutionService.CreateAgentBot(ctx, agent, s.aiProcessorURL)
+	})
+	if txErr != nil {
+		return nil, errorsPostgres.MapDBError(txErr, model.AgentErrors)
+	}
 	if err != nil {
 		log.Printf("Failed to create Evolution bot for agent %s: %v", agent.ID, err)
 		// Don't fail the agent creation if bot creation fails
@@ -295,7 +300,12 @@ func (s *agentService) Update(ctx context.Context, request *model.Agent, id uuid
 	}
 
 	// Update Evolution bot synchronously to ensure it works with the current context
-	evolutionBot, err := s.evolutionService.UpdateAgentBot(ctx, agent, s.aiProcessorURL)
+	evolutionBot, err, txErr := writeAgentBot(ctx, func() (*model.AgentBot, error) {
+		return s.evolutionService.UpdateAgentBot(ctx, agent, s.aiProcessorURL)
+	})
+	if txErr != nil {
+		return nil, errorsPostgres.MapDBError(txErr, model.AgentErrors)
+	}
 	if err != nil {
 		log.Printf("Failed to update Evolution bot for agent %s: %v", agent.ID, err)
 		// Don't fail the agent update if bot update fails
