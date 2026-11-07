@@ -69,12 +69,24 @@ func TestOpenAICompatibleByProvider(t *testing.T) {
 	}
 
 	agentsOnly := []string{"anthropic", "gemini", "groq", "mistral", "cohere",
-		"openrouter", "deepseek", "together_ai", "fireworks_ai", "perplexity",
+		"deepseek", "together_ai", "fireworks_ai", "perplexity",
 		"bedrock", "vertex_ai"}
 	for _, provider := range agentsOnly {
 		if IsOpenAICompatible(provider) {
 			t.Errorf("provider %q should not be OpenAI-compatible", provider)
 		}
+	}
+}
+
+func TestInboxAssistCompatibleByProvider(t *testing.T) {
+	compatible := []string{"openai", "azure", "custom", "custom_openai_compatible", "openrouter"}
+	for _, provider := range compatible {
+		if !IsInboxAssistCompatible(provider) {
+			t.Errorf("provider %q should be compatible with the inbox assist", provider)
+		}
+	}
+	if IsInboxAssistCompatible("anthropic") {
+		t.Error("Anthropic should remain incompatible with the inbox assist")
 	}
 }
 
@@ -87,6 +99,16 @@ func TestScopeIsCarriedToResponse(t *testing.T) {
 	account := ApiKey{Provider: "openai", Scope: ScopeAccount}
 	if got := account.ToResponse().Scope; got != ScopeAccount {
 		t.Errorf("scope = %q, want %q", got, ScopeAccount)
+	}
+}
+
+func TestOpenRouterResponseCompatibilityIsConsumerSpecific(t *testing.T) {
+	response := (ApiKey{Provider: "openrouter"}).ToResponse()
+	if response.OpenAICompatible {
+		t.Error("OpenRouter should not be marked compatible with every CRM AI feature")
+	}
+	if !response.InboxAssistCompatible {
+		t.Error("OpenRouter should be marked compatible with inbox assist")
 	}
 }
 
