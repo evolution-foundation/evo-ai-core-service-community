@@ -41,13 +41,14 @@ func installRuntimeScope(v1 *gin.RouterGroup, db *gorm.DB) {
 			tenant.MembershipTable, err)
 	}
 
-	// The SDK authorizer fails OPEN when EVO_LICENSING_PERMISSIVE_MEMBERSHIP
-	// is set, which is the ecosystem default. Gate it behind a membership
-	// check that ignores that flag, so a non-member is refused before any
-	// transaction binds app.current_tenant_id.
+	// Membership is decided here and nowhere else. The SDK authorizer is
+	// not in the chain: it re-decided membership with an allow-set that
+	// still pins role = 'agency_owner', refusing agency-team globals this
+	// gate admits, and it fails OPEN when EVO_LICENSING_PERMISSIVE_MEMBERSHIP
+	// is set. This gate ignores that flag and owns the bind itself.
 	checker := tenantmembership.NewSQLChecker(tenantmembership.NewSQLQuerier(sqlDB))
 	scope := tenant.NewEnterpriseScope(
-		newEnforcedAuthorizer(checker, tenant.NewSQLAuthorizer(sqlDB)),
+		newEnforcedAuthorizer(checker, newSQLBinder(sqlDB)),
 	)
 
 	mw := tenant.Middleware(scope, nil) // nil → DefaultUserIDExtractor reads ctx.Value("user_id")
@@ -93,7 +94,11 @@ func ginAdapter(mw func(http.Handler) http.Handler) gin.HandlerFunc {
 				// satisfies runtimecontext.ScopedConn. Without this, reads run on
 				// the pool with an empty GUC and the permissive RLS branch leaks
 				// rows cross-tenant. (P0 apikeys cross-tenant leak fix.)
-				if tx, ok := tenant.TxFromContext(ctx); ok {
+				// The tx is bound by enforcedAuthorizer under its own key:
+				// the SDK's TxFromContext reads an unexported key and never
+				// sees it. Reading the wrong key here leaves the scoped conn
+				// unset and every tenant-scoped read fails closed.
+				if tx, ok := txFromContext(ctx); ok {
 					ctx = runtimecontext.WithConn(ctx, tx)
 				}
 				c.Request = r.WithContext(ctx)
